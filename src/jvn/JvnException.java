@@ -21,7 +21,8 @@ public class JvnException extends Exception {
 	public JvnException() {
 	}
 	
-	public JvnException(String message) {
+	public JvnException(String message, Throwable cause) {
+		super(cause);
 		this.message = message;
 	}	
   

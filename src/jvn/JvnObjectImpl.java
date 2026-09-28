@@ -7,7 +7,7 @@ public class JvnObjectImpl implements JvnObject {
     // Identifiant de l'objet partagé
     private int objectId;
 
-    // État de l'objet partagé
+    // État de l'objet partagé dans la mémoire
     private Serializable objectState;
     
     // Etat du verrou local
@@ -34,11 +34,11 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     @Override
-    public void jvnLockRead() throws JvnException {
+    public synchronized void jvnLockRead() throws JvnException {
         switch(lockState) {
             case NL:
                 // On prend le verrou de lecture auprès du serveur
-                jvnServer.jvnLockRead(objectId);
+                this.objectState = jvnServer.jvnLockRead(objectId);
                 // Une fois qu'on a le verrou, on dit qu'on le possède.
                 lockState = LockState.R;
                 break;
@@ -60,14 +60,14 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     @Override
-    public void jvnLockWrite() throws JvnException {
+    public synchronized void jvnLockWrite() throws JvnException {
         switch(lockState) {
             case NL:
             case RC:
             case R:
-                // @Todo : Pour nous, on doit forcément passer de R à RC avant de pouvoir passer à W.
+                // Pour nous, on doit forcément passer de R à RC avant de pouvoir passer à W.
                 // On prend le verrou d'écriture auprès du serveur
-                jvnServer.jvnLockWrite(objectId);
+                this.objectState = jvnServer.jvnLockWrite(objectId);
                 lockState = LockState.W;
                 break;
 
@@ -83,7 +83,7 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     @Override
-    public void jvnUnLock() throws JvnException {
+    public synchronized void jvnUnLock() throws JvnException {
         switch(lockState) {
             case R:
                 // On lâche le verrou de lecture.
@@ -109,6 +109,7 @@ public class JvnObjectImpl implements JvnObject {
                 // On n'a pas de verrou à libérer.
                 break;
         }
+        notifyAll(); // On veut réveiller les threads RMI qui attendent de rétrograder les droits.
     }
 
     @Override
@@ -121,11 +122,8 @@ public class JvnObjectImpl implements JvnObject {
         return objectState;
     }
 
-    /**    
-     * 
-     */
     @Override
-    public void jvnInvalidateReader() throws JvnException {
+    public synchronized void jvnInvalidateReader() throws JvnException {
         try {
             while (lockState == LockState.R) {
                 wait(); // On attend que le verrou de lecture soit libéré
@@ -141,7 +139,7 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     @Override
-    public Serializable jvnInvalidateWriter() throws JvnException {
+    public synchronized Serializable jvnInvalidateWriter() throws JvnException {
         try {
             while (lockState == LockState.W || lockState == LockState.RWC) {
                 wait(); // On attend que le verrou d'écriture soit libéré
@@ -159,13 +157,14 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     @Override
-    public Serializable jvnInvalidateWriterForReader() throws JvnException {
+    public synchronized Serializable jvnInvalidateWriterForReader() throws JvnException {
         try {
             while (lockState == LockState.W) {
                 wait(); // On attend que le verrou d'écriture soit libéré
             }
             if (lockState == LockState.WC) {
-                lockState = LockState.NL;
+                // On veut garder le verrou en lecture car perdre les droits d'écriture ne nous empêche pas de lire.
+                lockState = LockState.RC;
             }
             if (lockState == LockState.RWC) {
                 // Comme c'est pour un autre lecteur, on peut garder le verrou en lecture qu'on avait.

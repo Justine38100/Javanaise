@@ -41,10 +41,10 @@ public interface JvnRemoteCoord extends Remote {
 	* @param jon : the JVN object name
 	* @param js : the remote reference of the JVNServer
 	* @throws java.rmi.RemoteException,JvnException
-	**/
+	**/ 
 	public JvnObject jvnLookupObject(String jon, JvnRemoteServer js)
 	throws java.rmi.RemoteException,jvn.JvnException; 
-	
+	 
 	/**
 	* Get a Read lock on a JVN object managed by a given JVN server 
 	* @param joi : the JVN object identification

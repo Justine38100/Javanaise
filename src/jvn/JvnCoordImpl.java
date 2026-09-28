@@ -63,7 +63,7 @@ public class JvnCoordImpl
   public JvnObject jvnLookupObject(String jon, JvnRemoteServer js)
   throws java.rmi.RemoteException,jvn.JvnException{
     // to be completed 
-    return null;
+    return null; // à enlever, on ne renvoie pas null, c'est juste pour que ça compile
   }
   
   /**
