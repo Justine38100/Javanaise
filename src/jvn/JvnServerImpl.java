@@ -85,7 +85,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			int newId = jvnCoord.jvnGetObjectId();
 			
 			// Création d'un nouvel objet JVN avec l'état fourni et l'identifiant obtenu
-			JvnObject newobject = new JvnObjectImpl(newId, o, this);
+			JvnObject newobject = new JvnObjectImpl(newId, o, this, true);
 			
 			// Ajout de l'objet JVN à la map locale
 			jvnObjectsMap.put(newId, newobject);
@@ -120,9 +120,17 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	**/
 	public JvnObject jvnLookupObject(String jon) throws jvn.JvnException {
 		try {
-			JvnObject lookedUpObject = jvnCoord.jvnLookupObject(jon, this);
+			JvnObjectImpl lookedUpObject = (JvnObjectImpl)jvnCoord.jvnLookupObject(jon, this);
+
+			if (lookedUpObject == null) {
+				return null;
+			}
 			
+			// Cet objet JVN reçu par lookup doit maintenant utiliser ce JvnServerImpl local.
+			lookedUpObject.setJvnServer(this);
+
 			jvnObjectsMap.put(lookedUpObject.jvnGetObjectId(), lookedUpObject);
+
 			return lookedUpObject;
 
 		} catch (Exception e) {

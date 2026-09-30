@@ -13,6 +13,7 @@ import java.awt.event.*;
 
 import jvn.*;
 import java.io.*;
+import java.rmi.Naming;
 
 
 public class Irc {
@@ -28,6 +29,9 @@ public class Irc {
   **/
 	public static void main(String argv[]) {
 	   try {
+
+		String url = "rmi://" + java.net.InetAddress.getLocalHost().getHostName() + "/Coordinator";
+		Naming.rebind(url, JvnCoordImpl.getCoordInstance());
 		   
 		// initialize JVN
 		JvnServerImpl js = JvnServerImpl.jvnGetServer();

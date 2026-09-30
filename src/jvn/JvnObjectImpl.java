@@ -1,6 +1,5 @@
 package jvn;
 import java.io.Serializable;
-import java.util.concurrent.locks.Lock;
 
 public class JvnObjectImpl implements JvnObject {
 
@@ -23,14 +22,13 @@ public class JvnObjectImpl implements JvnObject {
     private LockState lockState;
 
     // Référence vers le serveur local JvnServerImpl
-    private JvnServerImpl jvnServer;
+    private transient JvnServerImpl jvnServer;
 
-    public JvnObjectImpl(int objectId, Serializable objectState, JvnServerImpl jvnServer) {
+    public JvnObjectImpl(int objectId, Serializable objectState, JvnServerImpl jvnServer, boolean createdLocally) {
         this.objectId = objectId;
         this.objectState = objectState;
         this.jvnServer = jvnServer;
-        this.lockState = LockState.NL;
-        // @TODO: Réfléchir si c'est bien à NL qu'il faut l'initialiser
+        this.lockState = createdLocally ? LockState.W : LockState.NL;
     }
 
     @Override
@@ -176,5 +174,9 @@ public class JvnObjectImpl implements JvnObject {
             Thread.currentThread().interrupt();
             throw new JvnException("Interrupted while invalidating writer for another reader", e);
         }
+    }
+
+    public void setJvnServer(JvnServerImpl jvnServer) {
+        this.jvnServer = jvnServer;
     }
 }
