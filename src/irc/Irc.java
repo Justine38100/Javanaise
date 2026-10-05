@@ -13,8 +13,6 @@ import java.awt.event.*;
 
 import jvn.*;
 import java.io.*;
-import java.rmi.Naming;
-
 
 public class Irc {
 	public TextArea		text;
