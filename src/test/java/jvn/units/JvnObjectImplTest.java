@@ -1,32 +1,30 @@
 package jvn.units;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.io.Serializable;
+
+import org.junit.jupiter.api.Test;
 
 import jvn.core.JvnObject;
 import jvn.core.JvnObjectImpl;
 
-public class JvnObjectImplTest {
-
-    public static void main(String[] args) throws Exception {
-        testCreatedObjectKeepsWriteLockInCache();
-        testInvalidateWriterForReaderDowngradesWriteCacheToReadCache();
-        testInvalidateWriterRemovesWriteCacheAndReturnsState();
-        System.out.println("JvnObjectImplTest OK");
-    }
+class JvnObjectImplTest {
 
     /*
      * Scénario : un objet créé localement commence avec un verrou écriture actif.
      * Quand l'application le déverrouille, le verrou écriture reste en cache.
      * Une prise de verrou écriture plus tard doit donc être locale et ne pas appeler le serveur.
      */
-    private static void testCreatedObjectKeepsWriteLockInCache() throws Exception {
+    @Test
+    void createdObjectKeepsWriteLockInCache() throws Exception {
         JvnObject jo = new JvnObjectImpl(1, "initial", null, true);
 
         jo.jvnUnLock();
         jo.jvnLockWrite();
         jo.jvnUnLock();
 
-        assert "initial".equals(jo.jvnGetObjectState()) : "l etat de l objet doit etre conserve";
+        assertEquals("initial", jo.jvnGetObjectState(), "l'état de l'objet doit être conservé");
     }
 
     /*
@@ -35,7 +33,8 @@ public class JvnObjectImplTest {
      * L'objet local doit perdre son droit d'écriture mais garder un droit de lecture en cache (WC -> RC).
      * On vérifie qu'une lecture ultérieure reste locale et ne demande pas le serveur.
      */
-    private static void testInvalidateWriterForReaderDowngradesWriteCacheToReadCache() throws Exception {
+    @Test
+    void invalidateWriterForReaderDowngradesWriteCacheToReadCache() throws Exception {
         JvnObject jo = new JvnObjectImpl(2, "fresh-state", null, true);
 
         jo.jvnUnLock();
@@ -43,8 +42,8 @@ public class JvnObjectImplTest {
         jo.jvnLockRead();
         jo.jvnUnLock();
 
-        assert "fresh-state".equals(returnedState) : "la reduction doit retourner l etat courant";
-        assert "fresh-state".equals(jo.jvnGetObjectState()) : "l etat de l objet doit etre conserve";
+        assertEquals("fresh-state", returnedState, "la réduction doit retourner l'état courant");
+        assertEquals("fresh-state", jo.jvnGetObjectState(), "l'état de l'objet doit être conservé");
     }
 
     /*
@@ -52,12 +51,13 @@ public class JvnObjectImplTest {
      * Le coordinateur appelle jvnInvalidateWriter().
      * L'objet local doit perdre complètement son droit d'écriture (WC -> NL) et retourner son état courant.
      */
-    private static void testInvalidateWriterRemovesWriteCacheAndReturnsState() throws Exception {
+    @Test
+    void invalidateWriterRemovesWriteCacheAndReturnsState() throws Exception {
         JvnObject jo = new JvnObjectImpl(3, "last-write", null, true);
 
         jo.jvnUnLock();
         Serializable returnedState = jo.jvnInvalidateWriter();
 
-        assert "last-write".equals(returnedState) : "l invalidation de l ecrivain doit retourner l etat courant";
+        assertEquals("last-write", returnedState, "l'invalidation de l'écrivain doit retourner l'état courant");
     }
 }

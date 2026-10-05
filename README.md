@@ -3,32 +3,67 @@
 ## Sommaire
 
 - [Architecture](#architecture)
+- [Maven](#maven)
 - [Compilation](#compilation)
 - [Lancement Manuel](#lancement-manuel)
 - [Tests](#tests)
 - [Tests E2E](#tests-e2e)
-- [Remarque Sur Maven](#remarque-sur-maven)
 
 ## Architecture
 
-Le projet est organisé par responsabilité :
+Le projet suit une arborescence Maven standard :
 
-- `src/jvn/core` : coeur Javanaise version 1, avec les objets partagés, le serveur local, le coordinateur et les interfaces RMI.
-- `src/jvn/proxy` : version 2 transparente avec proxy dynamique Java.
-- `src/jvn/annotations` : annotations `@JvnRead` et `@JvnWrite` utilisées par le proxy.
-- `src/irc/model` : modèle métier de l'application IRC (`Sentence`, `SentenceItf`).
-- `src/irc/version1` : application IRC version 1, avec verrous explicites.
-- `src/irc/version2` : application IRC version 2, avec proxy transparent.
+```text
+src/main/java/      code applicatif
+src/test/java/      tests JUnit 5
+pom.xml
+```
 
-Le package `irc` est gardé parce qu'il décrit l'application exemple. Le renommer en `main` serait moins précis : `main` indique seulement qu'il y a un point d'entrée, pas le domaine fonctionnel.
+Organisation du code applicatif :
+
+- `src/main/java/jvn/core` : coeur Javanaise version 1, avec les objets partagés, le serveur local, le coordinateur et les interfaces RMI.
+- `src/main/java/jvn/proxy` : version 2 transparente avec proxy dynamique Java.
+- `src/main/java/jvn/annotations` : annotations `@JvnRead` et `@JvnWrite` utilisees par le proxy.
+- `src/main/java/irc/model` : modèle métier de l'application IRC (`Sentence`, `SentenceItf`).
+- `src/main/java/irc/version1` : application IRC version 1, avec verrous explicites.
+- `src/main/java/irc/version2` : application IRC version 2, avec proxy transparent.
+
+## Maven
+
+Le projet contient un `pom.xml` minimal :
+
+- `groupId` : `fr.m2.sar`
+- `artifactId` : `javanaise`
+- `version` : `1.0-SNAPSHOT`
+- compilation Java : 17
+
+Le projet utilise JUnit 5 pour les tests. Maven compile le code, compile les tests, puis lance automatiquement les classes de test avec le plugin Surefire.
 
 ## Compilation
 
-Depuis la racine du projet :
+Compiler les sources applicatives :
 
 ```bash
-mkdir -p bin
-javac -d bin $(find src -name '*.java' | sort)
+mvn compile
+```
+
+Compiler les sources et les tests :
+
+```bash
+mvn test-compile
+```
+
+Nettoyer les fichiers générés par Maven :
+
+```bash
+mvn clean
+```
+
+Les classes compilées sont générées dans :
+
+```text
+target/classes
+target/test-classes
 ```
 
 ## Lancement Manuel
@@ -42,96 +77,86 @@ pkill -f 'irc.version1.Irc'
 pkill -f 'irc.version2.Irc2'
 ```
 
-Nettoyer puis recompiler :
+Compiler :
 
 ```bash
-rm -rf bin
-mkdir -p bin
-javac -d bin $(find src -name '*.java' | sort)
+mvn compile
 ```
 
 Lancer le registre RMI :
 
 ```bash
-rmiregistry -J-Djava.class.path=bin &
+rmiregistry -J-Djava.class.path=target/classes &
 ```
 
 Lancer le coordinateur :
 
 ```bash
-java -cp bin jvn.core.JvnCoordImpl
+java -cp target/classes jvn.core.JvnCoordImpl
 ```
 
 Dans un autre terminal, lancer un client IRC version 1 :
 
 ```bash
-java -cp bin irc.version1.Irc
+java -cp target/classes irc.version1.Irc
 ```
 
 Ou lancer un client IRC version 2 avec proxy dynamique :
 
 ```bash
-java -cp bin irc.version2.Irc2
+java -cp target/classes irc.version2.Irc2
 ```
 
-Pour tester le partage, lancer un deuxième client dans un autre terminal.
+Pour tester le partage, lancer un deuxieme client dans un autre terminal.
 
 ## Tests
 
-Les tests utilisent des `main` Java et des `assert`. Il faut donc toujours lancer les tests avec `-ea` pour activer les assertions.
+Les tests utilisent JUnit 5.
 
-Compiler les sources et tous les tests :
+Lancer tous les tests :
 
 ```bash
-rm -rf bin
-mkdir -p bin
-javac -d bin $(find src test -name '*.java' | sort)
+mvn test
 ```
 
-Lancer le test de la machine à états de `JvnObjectImpl` :
+Lancer uniquement le test de la machine à états de `JvnObjectImpl` :
 
 ```bash
-java -ea -cp bin jvn.units.JvnObjectImplTest
+mvn -Dtest=JvnObjectImplTest test
 ```
 
-Lancer le test du coordinateur avec serveurs factices :
+Lancer uniquement le test du coordinateur avec serveurs factices :
 
 ```bash
-java -ea -cp bin jvn.units.JvnCoordImplTest
+mvn -Dtest=JvnCoordImplTest test
 ```
 
-Lancer le test d'intégration dans une seule JVM avec vrai registre RMI, vrai coordinateur et vrai serveur local :
+Lancer uniquement le test d'integration dans une seule JVM avec vrai registre RMI, vrai coordinateur et vrai serveur local :
 
 ```bash
-java -ea -cp bin jvn.integration.JvnIntegrationTest
+mvn -Dtest=JvnIntegrationTest test
 ```
 
-Lancer tous les tests principaux :
+Lancer uniquement les tests e2e multi-JVM :
 
 ```bash
-rm -rf bin
-mkdir -p bin
-javac -d bin $(find src test -name '*.java' | sort)
-java -ea -cp bin jvn.units.JvnObjectImplTest
-java -ea -cp bin jvn.units.JvnCoordImplTest
-java -ea -cp bin jvn.integration.JvnIntegrationTest
-java -ea -cp bin jvn.e2e.JvnMultiJvmIntegrationTest
+mvn -Dtest=JvnMultiJvmIntegrationTest test
 ```
 
 ## Tests E2E
 
-Le test e2e multi-JVM démarre `rmiregistry`, le coordinateur, deux clients réels, puis un test de charge à 2 clients x 1000 messages :
+Le test e2e multi-JVM demarre `rmiregistry`, le coordinateur, deux clients reels, puis un test de charge à 2 clients x 1000 messages :
 
 ```bash
-java -ea -cp bin jvn.e2e.JvnMultiJvmIntegrationTest
+mvn -Dtest=JvnMultiJvmIntegrationTest test
 ```
 
-Rôle des fichiers e2e :
+Role des fichiers e2e :
 
-- `test/jvn/e2e/JvnMultiJvmIntegrationTest.java` : chef d'orchestre qui lance les processus Java.
-- `test/jvn/e2e/utils/model/SharedText.java` : objet partagé utilisé par les tests.
-- `test/jvn/e2e/utils/onejvm/E2EWriterClient.java` : écrit une valeur simple.
-- `test/jvn/e2e/utils/onejvm/E2EReaderClient.java` : lit et vérifie cette valeur.
-- `test/jvn/e2e/utils/multijvm/E2ELoadCreatorClient.java` : crée l'objet du test de charge.
-- `test/jvn/e2e/utils/multijvm/E2ELoadAppenderClient.java` : ajoute 1000 messages.
-- `test/jvn/e2e/utils/multijvm/E2ELoadVerifierClient.java` : vérifie les 2000 messages.
+- `src/test/java/jvn/e2e/JvnMultiJvmIntegrationTest.java` : chef d'orchestre qui lance les processus Java.
+- `src/test/java/jvn/e2e/utils/model/SharedText.java` : objet partagé utilisé par les tests.
+- `src/test/java/jvn/e2e/utils/onejvm/E2EWriterClient.java` : écrit une valeur simple.
+- `src/test/java/jvn/e2e/utils/onejvm/E2EReaderClient.java` : lit et vérifie cette valeur.
+- `src/test/java/jvn/e2e/utils/multijvm/E2ELoadCreatorClient.java` : crée l'objet du test de charge.
+- `src/test/java/jvn/e2e/utils/multijvm/E2ELoadAppenderClient.java` : ajoute 1000 messages.
+- `src/test/java/jvn/e2e/utils/multijvm/E2ELoadVerifierClient.java` : vérifie les 2000 messages.

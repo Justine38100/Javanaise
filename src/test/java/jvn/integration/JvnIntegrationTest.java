@@ -1,23 +1,25 @@
 package jvn.integration;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import java.rmi.Naming;
 import java.rmi.registry.LocateRegistry;
+
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 
 import jvn.core.JvnCoordImpl;
 import jvn.core.JvnObject;
 import jvn.core.JvnServerImpl;
 
-public class JvnIntegrationTest {
+class JvnIntegrationTest {
 
-    public static void main(String[] args) throws Exception {
+    @BeforeAll
+    static void startRmiAndBindCoordinator() throws Exception {
         startRegistryIfNeeded();
         bindCoordinator();
-
-        testLookupUnknownThenCreateRegisterAndLookup();
-        testWriteThenReadThroughRealServerAndObject();
-
-        System.out.println("JvnIntegrationTest OK");
-        System.exit(0);
     }
 
     /*
@@ -26,12 +28,13 @@ public class JvnIntegrationTest {
      * Le lookup doit retourner null, puis le serveur crée l'objet, l'enregistre,
      * et un nouveau lookup sur le même nom doit retourner un objet existant avec le même id.
      */
-    private static void testLookupUnknownThenCreateRegisterAndLookup() throws Exception {
+    @Test
+    void lookupUnknownThenCreateRegisterAndLookup() throws Exception {
         JvnServerImpl server = JvnServerImpl.jvnGetServer();
-        String name = "INTEGRATION_OBJECT";
+        String name = "INTEGRATION_OBJECT_" + System.nanoTime();
 
         JvnObject unknown = server.jvnLookupObject(name);
-        assert unknown == null : "un lookup sur un objet inconnu doit retourner null";
+        assertNull(unknown, "un lookup sur un objet inconnu doit retourner null");
 
         JvnObject created = server.jvnCreateObject("etat-initial");
         int createdId = created.jvnGetObjectId();
@@ -39,9 +42,9 @@ public class JvnIntegrationTest {
         server.jvnRegisterObject(name, created);
 
         JvnObject lookedUp = server.jvnLookupObject(name);
-        assert lookedUp != null : "un lookup apres register doit retourner un objet";
-        assert lookedUp.jvnGetObjectId() == createdId : "l objet retrouve doit garder le meme id";
-        assert "etat-initial".equals(lookedUp.jvnGetObjectState()) : "l objet retrouve doit garder le meme etat";
+        assertNotNull(lookedUp, "un lookup après register doit retourner un objet");
+        assertEquals(createdId, lookedUp.jvnGetObjectId(), "l'objet retrouvé doit garder le même id");
+        assertEquals("etat-initial", lookedUp.jvnGetObjectState(), "l'objet retrouvé doit garder le même état");
     }
 
     /*
@@ -49,9 +52,10 @@ public class JvnIntegrationTest {
      * L'objet est créé, enregistré, puis on prend un verrou en écriture pour modifier son état,
      * et ensuite un verrou en lecture pour relire l'état modifié.
      */
-    private static void testWriteThenReadThroughRealServerAndObject() throws Exception {
+    @Test
+    void writeThenReadThroughRealServerAndObject() throws Exception {
         JvnServerImpl server = JvnServerImpl.jvnGetServer();
-        String name = "INTEGRATION_READ_WRITE";
+        String name = "INTEGRATION_READ_WRITE_" + System.nanoTime();
 
         JvnObject object = server.jvnCreateObject(new MutableValue("avant"));
         object.jvnUnLock();
@@ -62,7 +66,7 @@ public class JvnIntegrationTest {
         object.jvnUnLock();
 
         object.jvnLockRead();
-        assert ((MutableValue) object.jvnGetObjectState()).value.equals("apres") : "la lecture doit voir l etat ecrit";
+        assertEquals("apres", ((MutableValue) object.jvnGetObjectState()).value, "la lecture doit voir l'état écrit");
         object.jvnUnLock();
     }
 

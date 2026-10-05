@@ -1,5 +1,7 @@
 package jvn.e2e;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
@@ -7,38 +9,36 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-public class JvnMultiJvmIntegrationTest {
-    private static final String CLASSPATH = "bin";
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
-    public static void main(String[] args) throws Exception {
-        List<ManagedProcess> processes = new ArrayList<ManagedProcess>();
+class JvnMultiJvmIntegrationTest {
+    private static final String CLASSPATH = "target/classes:target/test-classes";
 
-        try {
-            // Démarre le registre RMI dans un processus séparé.
-            // C'est l'équivalent du terminal : rmiregistry -J-Djava.class.path=bin
-            ManagedProcess registry = startProcess("rmiregistry", "-J-Djava.class.path=bin");
-            processes.add(registry);
-            Thread.sleep(1000);
+    private final List<ManagedProcess> processes = new ArrayList<ManagedProcess>();
 
-            // Démarre le coordinateur dans une JVM séparée.
-            // Le coordinateur publie ensuite son objet distant sous le nom rmi://localhost/Coordinator.
-            ManagedProcess coordinator = startProcess("java", "-cp", CLASSPATH, "jvn.core.JvnCoordImpl");
-            processes.add(coordinator);
-            coordinator.waitForOutput("Javanaise coordinator ready", 5000);
+    @BeforeEach
+    void startRmiRegistryAndCoordinator() throws Exception {
+        // Démarre le registre RMI dans un processus séparé.
+        // C'est l'équivalent du terminal : rmiregistry -J-Djava.class.path=target/classes:target/test-classes
+        ManagedProcess registry = startProcess("rmiregistry", "-J-Djava.class.path=target/classes:target/test-classes");
+        processes.add(registry);
+        Thread.sleep(1000);
 
-            // Démarre deux clients dans deux JVM séparées pour tester le partage d'une valeur.
-            testTwoSeparateJvmClientsShareAValue(processes);
+        // Démarre le coordinateur dans une JVM séparée.
+        // Le coordinateur publie ensuite son objet distant sous le nom rmi://localhost/Coordinator.
+        ManagedProcess coordinator = startProcess("java", "-cp", CLASSPATH, "jvn.core.JvnCoordImpl");
+        processes.add(coordinator);
+        coordinator.waitForOutput("Javanaise coordinator ready", 5000);
+    }
 
-            // Démarre deux clients dans deux JVM séparées pour tester le partage d'une liste sous charge.
-            testTwoSeparateJvmClientsDoNotLoseMessagesUnderLoad(processes);
-
-            System.out.println("JvnMultiJvmIntegrationTest OK");
-        } finally {
-            // Nettoie tous les processus lancés par le test, même si une assertion échoue.
-            // Cela évite de laisser un rmiregistry ou un coordinateur tourner en arrière-plan.
-            for (int i = processes.size() - 1; i >= 0; i--) {
-                processes.get(i).destroy();
-            }
+    @AfterEach
+    void stopStartedProcesses() {
+        // Nettoie tous les processus lancés par le test, même si une assertion échoue.
+        // Cela évite de laisser un rmiregistry ou un coordinateur tourner en arrière-plan.
+        for (int i = processes.size() - 1; i >= 0; i--) {
+            processes.get(i).destroy();
         }
     }
 
@@ -57,7 +57,8 @@ public class JvnMultiJvmIntegrationTest {
      * - le reader doit lire exactement la valeur écrite par le writer ;
      * - les deux processus clients doivent se terminer avec un code de sortie 0.
      */
-    private static void testTwoSeparateJvmClientsShareAValue(List<ManagedProcess> processes) throws Exception {
+    @Test
+    void twoSeparateJvmClientsShareAValue() throws Exception {
         String name = "MULTI_JVM_VALUE_" + System.nanoTime();
         String expected = "bonjour-multi-jvm";
         File releaseFile = tempSignalFile("javanaise-simple-release");
@@ -77,12 +78,8 @@ public class JvnMultiJvmIntegrationTest {
         reader.waitForExit(10000);
         writer.waitForExit(10000);
 
-        if (reader.exitCode() != 0) {
-            throw new AssertionError("le lecteur multi-JVM a echoue:\n" + reader.output());
-        }
-        if (writer.exitCode() != 0) {
-            throw new AssertionError("l ecrivain multi-JVM a echoue:\n" + writer.output());
-        }
+        assertEquals(0, reader.exitCode(), "le lecteur multi-JVM a échoué:\n" + reader.output());
+        assertEquals(0, writer.exitCode(), "l'écrivain multi-JVM a échoué:\n" + writer.output());
     }
 
     /*
@@ -102,7 +99,8 @@ public class JvnMultiJvmIntegrationTest {
      * - aucun message A-i ou B-i ne doit manquer ;
      * - les trois processus de charge doivent se terminer avec un code de sortie 0.
      */
-    private static void testTwoSeparateJvmClientsDoNotLoseMessagesUnderLoad(List<ManagedProcess> processes) throws Exception {
+    @Test
+    void twoSeparateJvmClientsDoNotLoseMessagesUnderLoad() throws Exception {
         String name = "MULTI_JVM_LOAD_" + System.nanoTime();
         int iterations = 1000;
         File releaseFile = tempSignalFile("javanaise-load-release");
@@ -111,9 +109,7 @@ public class JvnMultiJvmIntegrationTest {
                 "jvn.e2e.utils.multijvm.E2ELoadCreatorClient", name);
         processes.add(creator);
         creator.waitForExit(10000);
-        if (creator.exitCode() != 0) {
-            throw new AssertionError("le createur du test de charge a echoue:\n" + creator.output());
-        }
+        assertEquals(0, creator.exitCode(), "le créateur du test de charge a échoué:\n" + creator.output());
 
         ManagedProcess clientA = startProcess("java", "-ea", "-cp", CLASSPATH,
                 "jvn.e2e.utils.multijvm.E2ELoadAppenderClient", name, "A", String.valueOf(iterations), releaseFile.getAbsolutePath());
@@ -136,15 +132,9 @@ public class JvnMultiJvmIntegrationTest {
         clientA.waitForExit(10000);
         clientB.waitForExit(10000);
 
-        if (verifier.exitCode() != 0) {
-            throw new AssertionError("le vérificateur du test de charge a échoué:\n" + verifier.output());
-        }
-        if (clientA.exitCode() != 0) {
-            throw new AssertionError("le client A du test de charge a échoué:\n" + clientA.output());
-        }
-        if (clientB.exitCode() != 0) {
-            throw new AssertionError("le client B du test de charge a échoué:\n" + clientB.output());
-        }
+        assertEquals(0, verifier.exitCode(), "le vérificateur du test de charge a échoué:\n" + verifier.output());
+        assertEquals(0, clientA.exitCode(), "le client A du test de charge a échoué:\n" + clientA.output());
+        assertEquals(0, clientB.exitCode(), "le client B du test de charge a échoué:\n" + clientB.output());
     }
 
     private static File tempSignalFile(String prefix) throws Exception {
