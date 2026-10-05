@@ -91,13 +91,13 @@ javac -d bin $(find src test -name '*.java' | sort)
 Lancer le test de la machine à états de `JvnObjectImpl` :
 
 ```bash
-java -ea -cp bin jvn.core.JvnObjectImplTest
+java -ea -cp bin jvn.units.JvnObjectImplTest
 ```
 
 Lancer le test du coordinateur avec serveurs factices :
 
 ```bash
-java -ea -cp bin jvn.core.JvnCoordImplTest
+java -ea -cp bin jvn.units.JvnCoordImplTest
 ```
 
 Lancer le test d'intégration dans une seule JVM avec vrai registre RMI, vrai coordinateur et vrai serveur local :
@@ -112,8 +112,8 @@ Lancer tous les tests principaux :
 rm -rf bin
 mkdir -p bin
 javac -d bin $(find src test -name '*.java' | sort)
-java -ea -cp bin jvn.core.JvnObjectImplTest
-java -ea -cp bin jvn.core.JvnCoordImplTest
+java -ea -cp bin jvn.units.JvnObjectImplTest
+java -ea -cp bin jvn.units.JvnCoordImplTest
 java -ea -cp bin jvn.integration.JvnIntegrationTest
 java -ea -cp bin jvn.e2e.JvnMultiJvmIntegrationTest
 ```
