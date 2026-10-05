@@ -1,4 +1,4 @@
-package jvn;
+package jvn.e2e;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -22,7 +22,7 @@ public class JvnMultiJvmIntegrationTest {
 
             // Démarre le coordinateur dans une JVM séparée.
             // Le coordinateur publie ensuite son objet distant sous le nom rmi://localhost/Coordinator.
-            ManagedProcess coordinator = startProcess("java", "-cp", CLASSPATH, "jvn.JvnCoordImpl");
+            ManagedProcess coordinator = startProcess("java", "-cp", CLASSPATH, "jvn.core.JvnCoordImpl");
             processes.add(coordinator);
             coordinator.waitForOutput("Javanaise coordinator ready", 5000);
 
@@ -63,7 +63,7 @@ public class JvnMultiJvmIntegrationTest {
         File releaseFile = tempSignalFile("javanaise-simple-release");
 
         ManagedProcess writer = startProcess("java", "-ea", "-cp", CLASSPATH,
-                "jvn.e2e.E2EWriterClient", name, expected, releaseFile.getAbsolutePath());
+                "jvn.e2e.utils.onejvm.E2EWriterClient", name, expected, releaseFile.getAbsolutePath());
         processes.add(writer);
 
         // Attend que le writer ait créé/enregistré l'objet et écrit la valeur.
@@ -71,7 +71,7 @@ public class JvnMultiJvmIntegrationTest {
         writer.waitForOutput("WRITER_READY", 10000);
 
         ManagedProcess reader = startProcess("java", "-ea", "-cp", CLASSPATH,
-                "jvn.e2e.E2EReaderClient", name, expected, releaseFile.getAbsolutePath());
+                "jvn.e2e.utils.onejvm.E2EReaderClient", name, expected, releaseFile.getAbsolutePath());
         processes.add(reader);
 
         reader.waitForExit(10000);
@@ -108,7 +108,7 @@ public class JvnMultiJvmIntegrationTest {
         File releaseFile = tempSignalFile("javanaise-load-release");
 
         ManagedProcess creator = startProcess("java", "-ea", "-cp", CLASSPATH,
-                "jvn.e2e.E2ELoadCreatorClient", name);
+                "jvn.e2e.utils.multijvm.E2ELoadCreatorClient", name);
         processes.add(creator);
         creator.waitForExit(10000);
         if (creator.exitCode() != 0) {
@@ -116,9 +116,9 @@ public class JvnMultiJvmIntegrationTest {
         }
 
         ManagedProcess clientA = startProcess("java", "-ea", "-cp", CLASSPATH,
-                "jvn.e2e.E2ELoadAppenderClient", name, "A", String.valueOf(iterations), releaseFile.getAbsolutePath());
+                "jvn.e2e.utils.multijvm.E2ELoadAppenderClient", name, "A", String.valueOf(iterations), releaseFile.getAbsolutePath());
         ManagedProcess clientB = startProcess("java", "-ea", "-cp", CLASSPATH,
-                "jvn.e2e.E2ELoadAppenderClient", name, "B", String.valueOf(iterations), releaseFile.getAbsolutePath());
+                "jvn.e2e.utils.multijvm.E2ELoadAppenderClient", name, "B", String.valueOf(iterations), releaseFile.getAbsolutePath());
         processes.add(clientA);
         processes.add(clientB);
 
@@ -128,7 +128,7 @@ public class JvnMultiJvmIntegrationTest {
         clientB.waitForOutput("APPENDER_DONE B", 30000);
 
         ManagedProcess verifier = startProcess("java", "-ea", "-cp", CLASSPATH,
-                "jvn.e2e.E2ELoadVerifierClient", name, String.valueOf(iterations), releaseFile.getAbsolutePath());
+                "jvn.e2e.utils.multijvm.E2ELoadVerifierClient", name, String.valueOf(iterations), releaseFile.getAbsolutePath());
         processes.add(verifier);
         verifier.waitForExit(15000);
 

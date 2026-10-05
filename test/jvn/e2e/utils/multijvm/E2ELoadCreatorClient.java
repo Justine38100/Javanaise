@@ -1,7 +1,8 @@
-package jvn.e2e;
+package jvn.e2e.utils.multijvm;
 
-import jvn.JvnObject;
-import jvn.JvnServerImpl;
+import jvn.core.JvnObject;
+import jvn.core.JvnServerImpl;
+import jvn.e2e.utils.model.SharedText;
 
 public class E2ELoadCreatorClient {
     public static void main(String[] args) throws Exception {

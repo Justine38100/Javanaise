@@ -1,8 +1,10 @@
-package jvn.e2e;
+package jvn.e2e.utils.onejvm;
 
 import java.io.File;
-import jvn.JvnObject;
-import jvn.JvnServerImpl;
+
+import jvn.core.JvnObject;
+import jvn.core.JvnServerImpl;
+import jvn.e2e.utils.model.SharedText;
 
 public class E2EReaderClient {
     public static void main(String[] args) throws Exception {

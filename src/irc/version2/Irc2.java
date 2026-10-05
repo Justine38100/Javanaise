@@ -2,12 +2,14 @@
  * Irc2 class : simple implementation of a chat using JAVANAISE transparent proxy
  */
 
-package irc;
+package irc.version2;
 
 import java.awt.*;
 import java.awt.event.*;
 
-import jvn.*;
+import irc.model.Sentence;
+import irc.model.SentenceItf;
+import jvn.proxy.JvnProxy;
 
 public class Irc2 {
     public TextArea text;

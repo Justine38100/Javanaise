@@ -1,6 +1,9 @@
-package jvn;
+package jvn.core;
 
 import java.io.Serializable;
+
+import jvn.core.JvnObject;
+import jvn.core.JvnObjectImpl;
 
 public class JvnObjectImplTest {
 

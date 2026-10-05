@@ -6,7 +6,7 @@
  * Authors: 
  */
 
-package jvn;
+package jvn.core;
 
 import java.rmi.server.UnicastRemoteObject;
 import java.util.Map;
@@ -60,7 +60,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* The JVN service is not used anymore
 	* @throws JvnException
 	**/
-	public void jvnTerminate() throws jvn.JvnException {
+	public void jvnTerminate() throws jvn.core.JvnException {
 		try {
 			// Déconnexion du serveur auprès du coordinateur.
 			jvnCoord.jvnTerminate(this);
@@ -70,7 +70,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			js = null;
 
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't terminate the JVN server", e);
+			throw new jvn.core.JvnException("We can't terminate the JVN server", e);
 		}
 	}
 
@@ -79,7 +79,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @param o : the JVN object state
 	* @throws JvnException
 	**/
-	public JvnObject jvnCreateObject(Serializable o) throws jvn.JvnException {
+	public JvnObject jvnCreateObject(Serializable o) throws jvn.core.JvnException {
 		try {
 			// Demande au coordinateur un nouvel identifiant pour l'objet JVN
 			int newId = jvnCoord.jvnGetObjectId();
@@ -93,7 +93,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			return newobject;
 
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't create a new JVN object", e);
+			throw new jvn.core.JvnException("We can't create a new JVN object", e);
 		}
 	}
 	
@@ -103,12 +103,12 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @param jo : the JVN object 
 	* @throws JvnException
 	**/
-	public void jvnRegisterObject(String jon, JvnObject jo) throws jvn.JvnException {
+	public void jvnRegisterObject(String jon, JvnObject jo) throws jvn.core.JvnException {
 		try {
 			// Enregistrement de l'objet JVN auprès du coordinateur.
 			jvnCoord.jvnRegisterObject(jon, jo, this);
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't register the JVN object", e);
+			throw new jvn.core.JvnException("We can't register the JVN object", e);
 		}
 	}
 	
@@ -118,7 +118,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @return the JVN object 
 	* @throws JvnException
 	**/
-	public JvnObject jvnLookupObject(String jon) throws jvn.JvnException {
+	public JvnObject jvnLookupObject(String jon) throws jvn.core.JvnException {
 		try {
 			JvnObjectImpl lookedUpObject = (JvnObjectImpl)jvnCoord.jvnLookupObject(jon, this);
 
@@ -134,7 +134,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			return lookedUpObject;
 
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't lookup the JVN object", e);
+			throw new jvn.core.JvnException("We can't lookup the JVN object", e);
 		}
 	}	
 	
@@ -149,7 +149,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			// Demande au coordinateur un verrou de lecture pour l'objet JVN identifié par joi
 			return jvnCoord.jvnLockRead(joi, this);
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't get a read lock on the JVN object", e);
+			throw new jvn.core.JvnException("We can't get a read lock on the JVN object", e);
 		}
 	}
 	
@@ -164,7 +164,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			// Demande au coordinateur un verrou d'écriture pour l'objet JVN identifié par joi
 			return jvnCoord.jvnLockWrite(joi, this);
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't get a write lock on the JVN object", e);
+			throw new jvn.core.JvnException("We can't get a write lock on the JVN object", e);
 		}
 	}	
 
@@ -175,7 +175,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @return void
 	* @throws java.rmi.RemoteException,JvnException
 	**/
-  	public void jvnInvalidateReader(int joi) throws java.rmi.RemoteException,jvn.JvnException {
+  	public void jvnInvalidateReader(int joi) throws java.rmi.RemoteException,jvn.core.JvnException {
 		try {
 			// Récupération de l'objet JVN correspondant à l'identifiant joi
 			JvnObject jvnObject = jvnObjectsMap.get(joi);
@@ -185,7 +185,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				jvnObject.jvnInvalidateReader();
 			}
 		} catch (Exception e) {
-			throw new jvn.JvnException("We can't invalidate the read lock on the JVN object", e);
+			throw new jvn.core.JvnException("We can't invalidate the read lock on the JVN object", e);
 		}
 	};
 	    
@@ -195,7 +195,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @return the current JVN object state
 	* @throws java.rmi.RemoteException,JvnException
 	**/
-	public Serializable jvnInvalidateWriter(int joi) throws java.rmi.RemoteException,jvn.JvnException { 
+	public Serializable jvnInvalidateWriter(int joi) throws java.rmi.RemoteException,jvn.core.JvnException { 
 			try {
 				// Récupération de l'objet JVN correspondant à l'identifiant joi
 				JvnObject jvnObject = jvnObjectsMap.get(joi);
@@ -206,7 +206,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				}
 				return null;
 			} catch (Exception e) {
-				throw new jvn.JvnException("We can't invalidate the write lock on the JVN object", e);
+				throw new jvn.core.JvnException("We can't invalidate the write lock on the JVN object", e);
 			}
 		};
 	
@@ -216,7 +216,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @return the current JVN object state
 	* @throws java.rmi.RemoteException,JvnException
 	**/
-	public Serializable jvnInvalidateWriterForReader(int joi) throws java.rmi.RemoteException,jvn.JvnException { 
+	public Serializable jvnInvalidateWriterForReader(int joi) throws java.rmi.RemoteException,jvn.core.JvnException { 
 			try {
 				// Récupération de l'objet JVN correspondant à l'identifiant joi
 				JvnObject jvnObject = jvnObjectsMap.get(joi);
@@ -227,7 +227,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				}
 				return null;
 			} catch (Exception e) {
-				throw new jvn.JvnException("We can't reduce the write lock on the JVN object", e);
+				throw new jvn.core.JvnException("We can't reduce the write lock on the JVN object", e);
 			}
 		};
 }

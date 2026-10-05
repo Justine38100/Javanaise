@@ -1,10 +1,15 @@
-package jvn;
+package jvn.proxy;
 
 import java.io.Serializable;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+
+import jvn.annotations.JvnRead;
+import jvn.annotations.JvnWrite;
+import jvn.core.JvnObject;
+import jvn.core.JvnServerImpl;
 
 public class JvnProxy implements InvocationHandler {
     

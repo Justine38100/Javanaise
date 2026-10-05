@@ -6,7 +6,7 @@
  * Authors: 
  */
 
-package jvn;
+package jvn.core;
 import java.rmi.Naming;
 
 import java.rmi.server.UnicastRemoteObject;
@@ -64,7 +64,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   *  newly created JVN object)
   * @throws java.rmi.RemoteException,JvnException
   **/
-  public synchronized int jvnGetObjectId() throws java.rmi.RemoteException,jvn.JvnException {
+  public synchronized int jvnGetObjectId() throws java.rmi.RemoteException,jvn.core.JvnException {
     int idTmp = nextObjectId;
     nextObjectId++;
     return idTmp;
@@ -77,7 +77,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   * @param js  : the remote reference of the JVNServer
   * @throws java.rmi.RemoteException,JvnException
   **/
-  public void jvnRegisterObject(String jon, JvnObject jo, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.JvnException{
+  public void jvnRegisterObject(String jon, JvnObject jo, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.core.JvnException{
     int objectId = jo.jvnGetObjectId();
     nameToIdMap.put(jon, objectId);
     objectStates.put(objectId, jo.jvnGetObjectState());
@@ -95,7 +95,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   * @param js : the remote reference of the JVNServer
   * @throws java.rmi.RemoteException,JvnException
   **/
-  public JvnObject jvnLookupObject(String jon, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.JvnException{
+  public JvnObject jvnLookupObject(String jon, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.core.JvnException{
     Integer objectId = nameToIdMap.get(jon);
 
     if (objectId == null) {

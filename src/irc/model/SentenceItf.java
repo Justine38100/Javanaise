@@ -1,7 +1,7 @@
-package irc;
+package irc.model;
 
-import jvn.JvnRead;
-import jvn.JvnWrite;
+import jvn.annotations.JvnRead;
+import jvn.annotations.JvnWrite;
 
 public interface SentenceItf {
 

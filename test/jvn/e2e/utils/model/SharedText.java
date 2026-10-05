@@ -1,4 +1,4 @@
-package jvn.e2e;
+package jvn.e2e.utils.model;
 
 import java.io.Serializable;
 import java.util.ArrayList;

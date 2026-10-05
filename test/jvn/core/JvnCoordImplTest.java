@@ -1,8 +1,14 @@
-package jvn;
+package jvn.core;
 
 import java.io.Serializable;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
+
+import jvn.core.JvnCoordImpl;
+import jvn.core.JvnException;
+import jvn.core.JvnObject;
+import jvn.core.JvnObjectImpl;
+import jvn.core.JvnRemoteServer;
 
 public class JvnCoordImplTest {
 

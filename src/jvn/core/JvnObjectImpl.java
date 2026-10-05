@@ -1,4 +1,4 @@
-package jvn;
+package jvn.core;
 import java.io.Serializable;
 
 public class JvnObjectImpl implements JvnObject {

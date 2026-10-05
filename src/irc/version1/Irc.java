@@ -5,14 +5,19 @@
  * Authors: 
  */
 
-package irc;
+package irc.version1;
 
 import java.awt.*;
 import java.awt.event.*; 
 
 
-import jvn.*;
+import jvn.core.JvnException;
+import jvn.core.JvnObject;
+import jvn.core.JvnServerImpl;
+
 import java.io.*;
+
+import irc.model.Sentence;
 
 public class Irc {
 	public TextArea		text;

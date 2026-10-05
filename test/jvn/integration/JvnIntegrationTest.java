@@ -1,7 +1,11 @@
-package jvn;
+package jvn.integration;
 
 import java.rmi.Naming;
 import java.rmi.registry.LocateRegistry;
+
+import jvn.core.JvnCoordImpl;
+import jvn.core.JvnObject;
+import jvn.core.JvnServerImpl;
 
 public class JvnIntegrationTest {
 

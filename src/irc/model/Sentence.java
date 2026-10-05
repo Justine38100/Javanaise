@@ -6,7 +6,7 @@
  * Authors: 
  */
 
-package irc;
+package irc.model;
 
 public class Sentence implements SentenceItf,java.io.Serializable {
 
