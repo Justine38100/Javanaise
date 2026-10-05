@@ -1,4 +1,4 @@
-package jvn.core;
+package jvn.units;
 
 import java.io.Serializable;
 
