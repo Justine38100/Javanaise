@@ -28,11 +28,7 @@ public class Irc {
   * create a JVN object nammed IRC for representing the Chat application
   **/
 	public static void main(String argv[]) {
-	   try {
-
-		String url = "rmi://" + java.net.InetAddress.getLocalHost().getHostName() + "/Coordinator";
-		Naming.rebind(url, JvnCoordImpl.getCoordInstance());
-		   
+	   try {		   
 		// initialize JVN
 		JvnServerImpl js = JvnServerImpl.jvnGetServer();
 		
