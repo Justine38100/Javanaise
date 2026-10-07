@@ -8,6 +8,7 @@
 
 package jvn.core;
 import java.rmi.Naming;
+import java.rmi.RemoteException;
 
 import java.rmi.server.UnicastRemoteObject;
 import java.io.Serializable;
@@ -119,17 +120,22 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     JvnRemoteServer currentWriter = writersMap.get(joi);
 
     if (currentWriter != null && !currentWriter.equals(js)) {
-      // On veut invalider le verrou d'écriture du serveur qui le possède.
-      Serializable newState = currentWriter.jvnInvalidateWriterForReader(joi);
+      try {
+        // On veut invalider le verrou d'écriture du serveur qui le possède.
+        Serializable newState = currentWriter.jvnInvalidateWriterForReader(joi);
 
-      // On a récupéré le verrou on doit mettre à jour notre état :
-      objectStates.put(joi, newState);
+        // On a récupéré le verrou on doit mettre à jour notre état :
+        objectStates.put(joi, newState);
 
-      // On supprime le serveur qui avait le verrou d'écriture de la liste des écrivains
-      writersMap.remove(joi);
+        // On supprime le serveur qui avait le verrou d'écriture de la liste des écrivains
+        writersMap.remove(joi);
 
-      // On ajoute le serveur qui avait le verrou d'écriture à la liste des lecteurs
-      readersMap.get(joi).add(currentWriter);
+        // On ajoute le serveur qui avait le verrou d'écriture à la liste des lecteurs
+        readersMap.get(joi).add(currentWriter);
+      } catch (RemoteException e) {
+        // Le serveur écrivain ne répond plus : il ne doit pas bloquer les futurs verrous.
+        removeDeadServer(currentWriter);
+      }
     }
 
     // On ajoute le serveur qui demande le verrou de lecture à la liste des lecteurs
@@ -149,10 +155,15 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     // Partie Lecture
     HashSet<JvnRemoteServer> currentReaders = readersMap.get(joi);
     if(currentReaders != null) {
-      for (JvnRemoteServer reader : currentReaders) {
+      for (JvnRemoteServer reader : new HashSet<JvnRemoteServer>(currentReaders)) {
         if (!reader.equals(js)) {
-          // On veut invalider le verrou de lecture du serveur qui le possède.
-          reader.jvnInvalidateReader(joi);
+          try {
+            // On veut invalider le verrou de lecture du serveur qui le possède.
+            reader.jvnInvalidateReader(joi);
+          } catch (RemoteException e) {
+            // Le lecteur est mort : on le retire des structures du coordinateur.
+            removeDeadServer(reader);
+          }
         }
       }
       // On vide la liste des lecteurs pour cet objet
@@ -162,14 +173,19 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     // Partie Ecriture
     JvnRemoteServer currentWriter = writersMap.get(joi);
     if (currentWriter != null && !currentWriter.equals(js)) {
-      // On veut invalider le verrou d'écriture du serveur qui le possède.
-      Serializable newState = currentWriter.jvnInvalidateWriter(joi);
+      try {
+        // On veut invalider le verrou d'écriture du serveur qui le possède.
+        Serializable newState = currentWriter.jvnInvalidateWriter(joi);
 
-      // On a récupéré le verrou on doit mettre à jour notre état :
-      objectStates.put(joi, newState);
+        // On a récupéré le verrou on doit mettre à jour notre état :
+        objectStates.put(joi, newState);
 
-      // On supprime le serveur qui avait le verrou d'écriture de la liste des écrivains
-      writersMap.remove(joi);
+        // On supprime le serveur qui avait le verrou d'écriture de la liste des écrivains
+        writersMap.remove(joi);
+      } catch (RemoteException e) {
+        // Le serveur écrivain ne répond plus : on libère son verrou côté coordinateur.
+        removeDeadServer(currentWriter);
+      }
     }
 
     // On ajoute le serveur qui demande le verrou d'écriture à la liste des écrivains
@@ -184,7 +200,11 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 	* @throws java.rmi.RemoteException, JvnException
 	**/
   public void jvnTerminate(JvnRemoteServer js) throws java.rmi.RemoteException, JvnException {
-    // On retire le serveur de toutes les listes de lecteurs et écrivains
+    removeDeadServer(js);
+  }
+
+  private void removeDeadServer(JvnRemoteServer js) {
+    // On retire le serveur de toutes les listes de lecteurs et écrivains.
     for (HashSet<JvnRemoteServer> readers : readersMap.values()) {
       readers.remove(js);
     }

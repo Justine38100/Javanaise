@@ -99,6 +99,77 @@ class JvnCoordImplTest {
         assertEquals("state-after-first-writer", state, "le verrou écriture doit retourner le dernier état connu");
     }
 
+    /*
+     * Scénario : un lecteur est enregistré côté coordinateur, puis tombe en panne.
+     * Quand un autre serveur demande un verrou écriture, l'invalidation du lecteur mort lève une RemoteException.
+     * Le coordinateur doit retirer ce lecteur mort et accorder le verrou écriture au nouveau serveur.
+     */
+    @Test
+    void writeLockIgnoresDeadReader() throws Exception {
+        JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
+        FakeServer owner = new FakeServer("state-from-owner");
+        FakeServer deadReader = new FakeServer("dead-reader-state");
+        FakeServer newWriter = new FakeServer("new-writer-state");
+        int id = coord.jvnGetObjectId();
+        JvnObject object = new JvnObjectImpl(id, "initial-state", null, true);
+        String name = "TEST_DEAD_READER_" + id;
+
+        coord.jvnRegisterObject(name, object, owner);
+        coord.jvnLockRead(id, deadReader);
+        deadReader.failOnInvalidateReader = true;
+
+        Serializable state = coord.jvnLockWrite(id, newWriter);
+
+        assertEquals(1, deadReader.invalidateReaderCount, "le coordinateur doit tenter d'invalider le lecteur mort");
+        assertEquals("state-from-owner", state, "le verrou écriture doit être accordé avec le dernier état connu");
+    }
+
+    /*
+     * Scénario : un écrivain possède le verrou, puis tombe en panne.
+     * Quand un autre serveur demande un verrou lecture, l'invalidation de l'écrivain mort lève une RemoteException.
+     * Le coordinateur doit retirer cet écrivain mort et accorder le verrou lecture avec son dernier état connu.
+     */
+    @Test
+    void readLockIgnoresDeadWriter() throws Exception {
+        JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
+        FakeServer deadWriter = new FakeServer("state-that-cannot-be-recovered");
+        FakeServer reader = new FakeServer("reader-state");
+        int id = coord.jvnGetObjectId();
+        JvnObject object = new JvnObjectImpl(id, "last-coordinator-state", null, true);
+        String name = "TEST_DEAD_WRITER_READ_" + id;
+
+        coord.jvnRegisterObject(name, object, deadWriter);
+        deadWriter.failOnInvalidateWriterForReader = true;
+
+        Serializable state = coord.jvnLockRead(id, reader);
+
+        assertEquals(1, deadWriter.invalidateWriterForReaderCount, "le coordinateur doit tenter de réduire l'écrivain mort");
+        assertEquals("last-coordinator-state", state, "le coordinateur garde son dernier état connu si l'écrivain est mort");
+    }
+
+    /*
+     * Scénario : un écrivain possède le verrou, puis tombe en panne.
+     * Quand un autre serveur demande un verrou écriture, l'invalidation de l'écrivain mort lève une RemoteException.
+     * Le coordinateur doit retirer l'ancien écrivain et donner le verrou au nouveau.
+     */
+    @Test
+    void writeLockIgnoresDeadWriter() throws Exception {
+        JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
+        FakeServer deadWriter = new FakeServer("state-that-cannot-be-recovered");
+        FakeServer newWriter = new FakeServer("new-writer-state");
+        int id = coord.jvnGetObjectId();
+        JvnObject object = new JvnObjectImpl(id, "last-coordinator-state", null, true);
+        String name = "TEST_DEAD_WRITER_WRITE_" + id;
+
+        coord.jvnRegisterObject(name, object, deadWriter);
+        deadWriter.failOnInvalidateWriter = true;
+
+        Serializable state = coord.jvnLockWrite(id, newWriter);
+
+        assertEquals(1, deadWriter.invalidateWriterCount, "le coordinateur doit tenter d'invalider l'écrivain mort");
+        assertEquals("last-coordinator-state", state, "le nouveau writer reçoit le dernier état connu du coordinateur");
+    }
+
     private static class FakeServer extends UnicastRemoteObject implements JvnRemoteServer {
         private static final long serialVersionUID = 1L;
 
@@ -106,6 +177,9 @@ class JvnCoordImplTest {
         private int invalidateReaderCount;
         private int invalidateWriterCount;
         private int invalidateWriterForReaderCount;
+        private boolean failOnInvalidateReader;
+        private boolean failOnInvalidateWriter;
+        private boolean failOnInvalidateWriterForReader;
 
         FakeServer(Serializable state) throws RemoteException {
             super();
@@ -114,15 +188,24 @@ class JvnCoordImplTest {
 
         public void jvnInvalidateReader(int joi) throws RemoteException, JvnException {
             invalidateReaderCount++;
+            if (failOnInvalidateReader) {
+                throw new RemoteException("client reader unreachable");
+            }
         }
 
         public Serializable jvnInvalidateWriter(int joi) throws RemoteException, JvnException {
             invalidateWriterCount++;
+            if (failOnInvalidateWriter) {
+                throw new RemoteException("client writer unreachable");
+            }
             return state;
         }
 
         public Serializable jvnInvalidateWriterForReader(int joi) throws RemoteException, JvnException {
             invalidateWriterForReaderCount++;
+            if (failOnInvalidateWriterForReader) {
+                throw new RemoteException("client writer unreachable");
+            }
             return state;
         }
     }
