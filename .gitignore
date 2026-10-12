@@ -3,3 +3,4 @@
 /java.policy
 *.class
 /target/
+/jvn-coordinator.snapshot*

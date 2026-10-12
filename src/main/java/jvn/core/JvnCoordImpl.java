@@ -11,6 +11,11 @@ import java.rmi.Naming;
 import java.rmi.RemoteException;
 
 import java.rmi.server.UnicastRemoteObject;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.util.Map;
 import java.util.Collections;
@@ -21,6 +26,10 @@ import java.util.HashSet;
 public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord {
 
 	private static final long serialVersionUID = 1L;
+
+  private static final String SNAPSHOT_FILE_PROPERTY = "jvn.coord.snapshot";
+
+  private static final String DEFAULT_SNAPSHOT_FILE = "jvn-coordinator.snapshot";
 
   // Singleton du coordinateur
   private static JvnCoordImpl coordInstance = null;
@@ -46,13 +55,17 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   **/
 	private JvnCoordImpl() throws Exception {
     super();
-    nextObjectId = 0;
-    this.nameToIdMap = new HashMap<String, Integer>();
-    this.objectStates = new HashMap<Integer, Serializable>();
-    this.readersMap = new HashMap<Integer, HashSet<JvnRemoteServer>>();
-    this.writersMap = new HashMap<Integer, JvnRemoteServer>();
+    // Initialisation des structures mémoire du coordinateur
+    initializeEmptyState();
+
+    // Chargement des fichiers de snapshot si ils existent.
+    loadSnapshotIfExists();
 	}
 
+  /**
+   * On récupère l'instance du coordinateur
+   * @return l'instance du coordinateur
+   */
   public static JvnCoordImpl getCoordInstance() throws Exception {
     if (coordInstance == null) {
       coordInstance = new JvnCoordImpl();
@@ -68,6 +81,9 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   public synchronized int jvnGetObjectId() throws java.rmi.RemoteException,jvn.core.JvnException {
     int idTmp = nextObjectId;
     nextObjectId++;
+
+    // Sauvegarde dans le snapshot après l'incrémentation de nextObjectId.
+    saveSnapshot();
     return idTmp;
   }
   
@@ -88,6 +104,9 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 
     // On initialise la liste des lecteurs pour cet objet
     readersMap.put(objectId, new HashSet<JvnRemoteServer>());
+
+    // Sauvegarde dans le snapshot après l'enregistrement de l'objet.
+    saveSnapshot();
   }
   
   /**
@@ -126,6 +145,9 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 
         // On a récupéré le verrou on doit mettre à jour notre état :
         objectStates.put(joi, newState);
+
+        // Sauvegarde dans le snapshot après l'invalidation du verrou d'écriture.
+        saveSnapshot();
 
         // On supprime le serveur qui avait le verrou d'écriture de la liste des écrivains
         writersMap.remove(joi);
@@ -180,6 +202,9 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
         // On a récupéré le verrou on doit mettre à jour notre état :
         objectStates.put(joi, newState);
 
+        // Sauvegarde dans le snapshot après l'invalidation du verrou d'écriture.
+        saveSnapshot();
+
         // On supprime le serveur qui avait le verrou d'écriture de la liste des écrivains
         writersMap.remove(joi);
       } catch (RemoteException e) {
@@ -223,6 +248,9 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     // On mémorise l'état envoyé par le proxy après une méthode @JvnWrite réussie.
     // Si le client tombe ensuite en panne, le coordinateur garde déjà cette version.
     objectStates.put(joi, state);
+
+    // Sauvegarde dans le snapshot après la mise à jour de l'état de l'objet.
+    saveSnapshot();
   }
 
 	/**
@@ -242,6 +270,158 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     // Un serveur peut posséder plusieurs verrous d'écriture, il faut tous les supprimer.
     writersMap.values().removeAll(Collections.singleton(js));
   }
+
+  /**
+   * Initialise un coordinateur vide.
+   *
+   * Spécification :
+   * - cette méthode prépare les structures mémoire utilisées par le coordinateur ;
+   * - elle est utilisée au premier démarrage ou avant de recharger un snapshot ;
+   * - les verrous ne sont pas considérés comme durables ;
+   */
+  private void initializeEmptyState() {
+    nextObjectId = 0;
+    this.nameToIdMap = new HashMap<String, Integer>();
+    this.objectStates = new HashMap<Integer, Serializable>();
+    this.readersMap = new HashMap<Integer, HashSet<JvnRemoteServer>>();
+    this.writersMap = new HashMap<Integer, JvnRemoteServer>();
+  }
+
+  /**
+   * Charge l'état durable du coordinateur depuis le disque si un snapshot existe.
+   *
+   * Spécification :
+   * - seuls nextObjectId, nameToIdMap et objectStates sont restaurés ;
+   * - les lecteurs et écrivains ne sont pas restaurés, car ce sont des références RMI
+   *   vers des clients qui peuvent avoir disparu pendant la panne ;
+   * - après le chargement, chaque objet connu récupère simplement une liste de lecteurs vide.
+   *
+   * @throws JvnException si le snapshot existe mais ne peut pas être relu
+   */
+  private void loadSnapshotIfExists() throws JvnException {
+
+    // On initialise les structures mémoire avant de tenter de charger un snapshot.
+    File snapshotFile = getSnapshotFile();
+
+    // On regarde si le fichier de snapshot existe. 
+    // S'il n'existe pas, on ne fait rien et on reste avec un coordinateur vide.
+    if (!snapshotFile.exists()) {
+      return;
+    }
+
+    // S'il existe, on tente de le charger. S'il est corrompu ou illisible, on échoue.
+    try (ObjectInputStream input = new ObjectInputStream(new FileInputStream(snapshotFile))) {
+      CoordinatorSnapshot snapshot = (CoordinatorSnapshot) input.readObject();
+      this.nextObjectId = snapshot.nextObjectId;
+      this.nameToIdMap = snapshot.nameToIdMap;
+      this.objectStates = snapshot.objectStates;
+      rebuildLockMapsAfterRecovery();
+    } catch (Exception e) {
+      throw new JvnException("Impossible de charger le snapshot du coordinateur", e);
+    }
+  }
+
+  /**
+   * Sauvegarde sur disque l'état durable du coordinateur.
+   *
+   * Spécification :
+   * - la sauvegarde est faite après chaque modification durable ;
+   * - elle protège les noms, les identifiants et le dernier état connu des objets ;
+   * - elle ne sauvegarde pas les verrous, ils sont initialisés à NL après un redémarrage ;
+   * - l'écriture se fait dans un fichier temporaire puis par renommage pour éviter un fichier
+   *   partiellement écrit si la machine tombe pendant la sauvegarde.
+   *
+   * @throws JvnException si la sauvegarde disque échoue
+   */
+  private void saveSnapshot() throws JvnException {
+
+    // On récupère le fichier de snapshot.
+    File snapshotFile = getSnapshotFile();
+
+    // On s'assure que le répertoire parent (du fichier de snapshot) existe, sinon on le crée.
+    File parent = snapshotFile.getParentFile();
+
+    // On crée le répertoire parent si nécessaire. Si la création échoue, on lève une exception.
+    if (parent != null && !parent.exists() && !parent.mkdirs()) {
+      throw new JvnException("Impossible de créer le répertoire du snapshot du coordinateur", null);
+    }
+
+    // On écrit d'abord dans un fichier temporaire pour éviter de corrompre le snapshot existant.
+    File temporaryFile = new File(snapshotFile.getPath() + ".tmp");
+
+    // On crée un objet snapshot qui contient les données à sauvegarder.
+    CoordinatorSnapshot snapshot = new CoordinatorSnapshot(nextObjectId, nameToIdMap, objectStates);
+
+    // On écrit le snapshot dans le fichier temporaire. Si l'écriture échoue, on lève une exception.
+    try (ObjectOutputStream output = new ObjectOutputStream(new FileOutputStream(temporaryFile))) {
+      output.writeObject(snapshot);
+    } catch (Exception e) {
+      throw new JvnException("Impossible de sauvegarder le snapshot du coordinateur", e);
+    }
+
+    // On remplace le fichier de snapshot existant par le fichier temporaire.
+    if (!temporaryFile.renameTo(snapshotFile)) {
+
+      // Si le fichier de snapshot existant existe déjà, on essaie de le supprimer avant de renommer.
+      if (snapshotFile.exists() && !snapshotFile.delete()) {
+        throw new JvnException("Impossible de remplacer l'ancien snapshot du coordinateur", null);
+      }
+
+      // On essaie à nouveau de renommer le fichier temporaire en fichier de snapshot.
+      if (!temporaryFile.renameTo(snapshotFile)) {
+        throw new JvnException("Impossible de finaliser le snapshot du coordinateur", null);
+      }
+    }
+  }
+
+  /**
+   * Récupère le fichier de snapshot à utiliser pour la sauvegarde et la restauration.
+   * La valeur par défaut est "jvn-coordinator.snapshot".
+   * @return
+   */
+  private File getSnapshotFile() {
+    return new File(System.getProperty(SNAPSHOT_FILE_PROPERTY, DEFAULT_SNAPSHOT_FILE));
+  }
+
+  /**
+   * Reconstruit les structures de verrous après la récupération d'un snapshot.
+   */
+  private void rebuildLockMapsAfterRecovery() {
+    this.readersMap = new HashMap<Integer, HashSet<JvnRemoteServer>>();
+    this.writersMap = new HashMap<Integer, JvnRemoteServer>();
+
+    // Pour chaque objet connu, on initialise une liste de lecteurs vide et aucun écrivain.
+    for (Integer objectId : objectStates.keySet()) {
+      readersMap.put(objectId, new HashSet<JvnRemoteServer>());
+    }
+  }
+
+  /**
+   * Classe interne pour représenter un snapshot du coordinateur.
+   * Elle est sérialisable pour pouvoir être écrite sur disque.
+   */
+  private static class CoordinatorSnapshot implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    // Ce qu'on veut sauvegarder : l'identifiant suivant à attribuer, le dictionnaire des noms et le dernier état connu des objets.
+    private int nextObjectId;
+    private Map<String, Integer> nameToIdMap;
+    private Map<Integer, Serializable> objectStates;
+
+    /**
+     * Constructeur pour créer un snapshot du coordinateur.
+     * @param nextObjectId l'identifiant suivant à attribuer
+     * @param nameToIdMap le dictionnaire des noms d'objets à leurs identifiants
+     * @param objectStates le dernier état connu des objets
+     */
+    private CoordinatorSnapshot(int nextObjectId, Map<String, Integer> nameToIdMap, Map<Integer, Serializable> objectStates) {
+      this.nextObjectId = nextObjectId;
+      this.nameToIdMap = new HashMap<String, Integer>(nameToIdMap);
+      this.objectStates = new HashMap<Integer, Serializable>(objectStates);
+    }
+  }
+
   public static void main(String[] args) {
     try {
       JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();

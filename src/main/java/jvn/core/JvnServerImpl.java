@@ -9,6 +9,7 @@
 package jvn.core;
 
 import java.rmi.server.UnicastRemoteObject;
+import java.rmi.RemoteException;
 import java.util.Map;
 import java.util.HashMap;
 import java.io.*;
@@ -36,7 +37,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	 **/
 	private JvnServerImpl() throws Exception {
 		super();
-		this.jvnCoord = (JvnRemoteCoord) java.rmi.Naming.lookup("rmi://localhost/Coordinator");
+		this.jvnCoord = lookupCoordinator();
 		this.jvnObjectsMap = new HashMap<Integer, JvnObject>();
 	}
 	
@@ -61,17 +62,15 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @throws JvnException
 	**/
 	public void jvnTerminate() throws jvn.core.JvnException {
-		try {
+		callCoordinator(() -> {
 			// Déconnexion du serveur auprès du coordinateur.
 			jvnCoord.jvnTerminate(this);
+			return null;
+		}, "Erreur lors de la terminaison du serveur JVN");
 
-			// Nettoyage des ressources locales
-			jvnObjectsMap.clear();
-			js = null;
-
-		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't terminate the JVN server", e);
-		}
+		// Nettoyage des ressources locales
+		jvnObjectsMap.clear();
+		js = null;
 	}
 
 	/**
@@ -82,7 +81,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	public JvnObject jvnCreateObject(Serializable o) throws jvn.core.JvnException {
 		try {
 			// Demande au coordinateur un nouvel identifiant pour l'objet JVN
-			int newId = jvnCoord.jvnGetObjectId();
+			int newId = callCoordinator(() -> jvnCoord.jvnGetObjectId(), "Erreur lors de la création d'un nouvel objet JVN");
 			
 			// Création d'un nouvel objet JVN avec l'état fourni et l'identifiant obtenu
 			JvnObject newobject = new JvnObjectImpl(newId, o, this, true);
@@ -93,7 +92,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			return newobject;
 
 		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't create a new JVN object", e);
+			throw new jvn.core.JvnException("Erreur lors de la création d'un nouvel objet JVN", e);
 		}
 	}
 	
@@ -104,12 +103,11 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @throws JvnException
 	**/
 	public void jvnRegisterObject(String jon, JvnObject jo) throws jvn.core.JvnException {
-		try {
+		callCoordinator(() -> {
 			// Enregistrement de l'objet JVN auprès du coordinateur.
 			jvnCoord.jvnRegisterObject(jon, jo, this);
-		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't register the JVN object", e);
-		}
+			return null;
+		}, "Erreur lors de l'enregistrement de l'objet JVN");
 	}
 	
 	/**
@@ -120,7 +118,10 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	**/
 	public JvnObject jvnLookupObject(String jon) throws jvn.core.JvnException {
 		try {
-			JvnObjectImpl lookedUpObject = (JvnObjectImpl)jvnCoord.jvnLookupObject(jon, this);
+			JvnObjectImpl lookedUpObject = (JvnObjectImpl) callCoordinator(
+				() -> jvnCoord.jvnLookupObject(jon, this),
+				"Erreur lors de la recherche de l'objet JVN"
+			);
 
 			if (lookedUpObject == null) {
 				return null;
@@ -134,7 +135,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			return lookedUpObject;
 
 		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't lookup the JVN object", e);
+			throw new jvn.core.JvnException("Erreur lors de la recherche de l'objet JVN", e);
 		}
 	}	
 	
@@ -145,12 +146,8 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @throws  JvnException
 	**/
 	public Serializable jvnLockRead(int joi) throws JvnException {
-		try {
-			// Demande au coordinateur un verrou de lecture pour l'objet JVN identifié par joi
-			return jvnCoord.jvnLockRead(joi, this);
-		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't get a read lock on the JVN object", e);
-		}
+		// Demande au coordinateur un verrou de lecture pour l'objet JVN identifié par joi.
+		return callCoordinator(() -> jvnCoord.jvnLockRead(joi, this), "Erreur lors de l'obtention d'un verrou de lecture sur l'objet JVN");
 	}
 	
 	/**
@@ -160,12 +157,8 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* @throws  JvnException
 	**/
 	public Serializable jvnLockWrite(int joi) throws JvnException {
-		try {
-			// Demande au coordinateur un verrou d'écriture pour l'objet JVN identifié par joi
-			return jvnCoord.jvnLockWrite(joi, this);
-		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't get a write lock on the JVN object", e);
-		}
+		// Demande au coordinateur un verrou d'écriture pour l'objet JVN identifié par joi.
+		return callCoordinator(() -> jvnCoord.jvnLockWrite(joi, this), "Erreur lors de l'obtention d'un verrou d'écriture sur l'objet JVN");
 	}	
 
 	/**
@@ -182,13 +175,101 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	 * @throws JvnException si la sauvegarde auprès du coordinateur échoue
 	 */
 	public void jvnUpdateObjectState(int joi, Serializable state) throws JvnException {
-		try {
+		callCoordinator(() -> {
 			// Relais local utilisé par le proxy : après une écriture réussie,
 			// le serveur transmet l'état courant au coordinateur pour le sauvegarder.
 			jvnCoord.jvnUpdateObjectState(joi, state, this);
-		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't update the JVN object state", e);
+			return null;
+		}, "Erreur lors de la mise à jour de l'état de l'objet JVN");
+	}
+
+	/**
+	 * Exécute un appel vers le coordinateur avec une reconnexion simple.
+	 *
+	 * Spécification :
+	 * - le premier appel utilise la référence RMI courante ;
+	 * - si l'appel échoue avec une RemoteException, on suppose que le coordinateur
+	 *   est tombé ou a redémarré ;
+	 * - le serveur refait alors un lookup RMI du coordinateur ;
+	 * - après reconnexion, tous les verrous locaux sont remis à NL car le nouveau
+	 *   coordinateur ne connaît pas les anciens droits en cache ;
+	 * - l'appel est retenté une seule fois pour éviter une boucle infinie.
+	 *
+	 * @param call l'appel à exécuter auprès du coordinateur
+	 * @param errorMessage le message utilisé si l'appel échoue définitivement
+	 * @return le résultat de l'appel
+	 * @throws JvnException si le coordinateur reste indisponible ou si l'appel échoue
+	 */
+	private <T> T callCoordinator(CoordinatorCall<T> call, String errorMessage) throws JvnException {
+		try {
+			return call.execute();
+		} catch (Exception firstFailure) {
+			if (!isCoordinatorFailure(firstFailure)) {
+				throw new jvn.core.JvnException(errorMessage, firstFailure);
+			}
+
+			try {
+				reconnectCoordinatorAfterFailure();
+				return call.execute();
+			} catch (Exception secondFailure) {
+				throw new jvn.core.JvnException(errorMessage, secondFailure);
+			}
 		}
+	}
+
+	/**
+	 * Effectue un lookup RMI pour obtenir une référence vers le coordinateur.
+	 * @return la référence vers le coordinateur
+	 * @throws Exception si le lookup échoue
+	 */
+	private JvnRemoteCoord lookupCoordinator() throws Exception {
+		return (JvnRemoteCoord) java.rmi.Naming.lookup("rmi://localhost/Coordinator");
+	}
+
+	/**
+	 * Reconnecte le serveur au coordinateur après une défaillance.
+	 * @throws Exception
+	 */
+	private void reconnectCoordinatorAfterFailure() throws Exception {
+		this.jvnCoord = lookupCoordinator();
+		resetLocalLocksAfterCoordinatorRecovery();
+	}
+
+	/**
+	 * Détermine si une exception est due à une défaillance du coordinateur ou à un problème de communication RMI.
+	 * @param exception
+	 * @return
+	 */
+	private boolean isCoordinatorFailure(Exception exception) {
+		Throwable current = exception;
+
+		while (current != null) {
+			if (current instanceof RemoteException) {
+				return true;
+			}
+			current = current.getCause();
+		}
+
+		return false;
+	}
+
+	/**
+	 * Réinitialise les verrous locaux de tous les objets JVN après la récupération du coordinateur.
+	 */
+	private void resetLocalLocksAfterCoordinatorRecovery() {
+		for (JvnObject object : jvnObjectsMap.values()) {
+			if (object instanceof JvnObjectImpl) {
+				((JvnObjectImpl) object).jvnResetLockAfterCoordinatorRecovery();
+			}
+		}
+	}
+
+	/**
+	 * Interface fonctionnelle représentant un appel vers le coordinateur.
+	 * @param <T>
+	 */
+	private interface CoordinatorCall<T> {
+		T execute() throws Exception;
 	}
 
 	/**
@@ -208,7 +289,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				jvnObject.jvnInvalidateReader();
 			}
 		} catch (Exception e) {
-			throw new jvn.core.JvnException("We can't invalidate the read lock on the JVN object", e);
+			throw new jvn.core.JvnException("Erreur lors de l'invalidation du verrou de lecture sur l'objet JVN", e);
 		}
 	};
 	    
@@ -229,7 +310,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				}
 				return null;
 			} catch (Exception e) {
-				throw new jvn.core.JvnException("We can't invalidate the write lock on the JVN object", e);
+				throw new jvn.core.JvnException("Erreur lors de l'invalidation du verrou d'écriture sur l'objet JVN", e);
 			}
 		};
 	
@@ -250,7 +331,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				}
 				return null;
 			} catch (Exception e) {
-				throw new jvn.core.JvnException("We can't reduce the write lock on the JVN object", e);
+				throw new jvn.core.JvnException("Erreur lors de la réduction du verrou d'écriture sur l'objet JVN", e);
 			}
 		};
 }

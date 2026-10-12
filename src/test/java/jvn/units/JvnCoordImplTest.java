@@ -5,10 +5,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.Serializable;
+import java.lang.reflect.Field;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import jvn.core.JvnCoordImpl;
 import jvn.core.JvnException;
@@ -17,6 +20,9 @@ import jvn.core.JvnObjectImpl;
 import jvn.core.JvnRemoteServer;
 
 class JvnCoordImplTest {
+
+    @TempDir
+    Path temporaryDirectory;
 
     /*
      * Scénario : plusieurs objets sont créés.
@@ -196,6 +202,57 @@ class JvnCoordImplTest {
             () -> coord.jvnUpdateObjectState(id, "stale-state", otherServer),
             "un serveur qui n'est pas writer ne doit pas écraser l'état"
         );
+    }
+
+    /*
+     * Scénario : le coordinateur sauvegarde son état durable sur disque,
+     * puis on simule un redémarrage en supprimant l'instance singleton en mémoire.
+     * Le nouveau coordinateur doit recharger le nom de l'objet, son dernier état connu
+     * et le prochain identifiant à utiliser. Les verrous ne doivent pas être restaurés.
+     */
+    @Test
+    void coordinatorReloadsDurableStateFromSnapshotAfterRestart() throws Exception {
+        String previousSnapshotProperty = System.getProperty("jvn.coord.snapshot");
+        System.setProperty("jvn.coord.snapshot", temporaryDirectory.resolve("coord.snapshot").toString());
+        resetCoordinatorSingleton();
+
+        try {
+            JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
+            FakeServer writerBeforeRestart = new FakeServer("writer-before-restart");
+            int id = coord.jvnGetObjectId();
+            String name = "TEST_COORD_RECOVERY_" + id;
+
+            coord.jvnRegisterObject(name, new JvnObjectImpl(id, "initial-state", null, true), writerBeforeRestart);
+            coord.jvnUpdateObjectState(id, "state-saved-before-restart", writerBeforeRestart);
+
+            resetCoordinatorSingleton();
+            JvnCoordImpl recoveredCoord = JvnCoordImpl.getCoordInstance();
+            FakeServer readerAfterRestart = new FakeServer("reader-after-restart");
+
+            JvnObject lookedUp = recoveredCoord.jvnLookupObject(name, readerAfterRestart);
+            Serializable state = recoveredCoord.jvnLockRead(id, readerAfterRestart);
+            int nextId = recoveredCoord.jvnGetObjectId();
+
+            assertNotNull(lookedUp, "l'objet nommé doit être restauré après redémarrage");
+            assertEquals(id, lookedUp.jvnGetObjectId(), "l'identifiant de l'objet doit être restauré");
+            assertEquals("state-saved-before-restart", lookedUp.jvnGetObjectState(), "le dernier état connu doit être restauré");
+            assertEquals("state-saved-before-restart", state, "un verrou lecture après redémarrage doit retourner l'état restauré");
+            assertEquals(id + 1, nextId, "le coordinateur ne doit pas réutiliser un identifiant déjà attribué");
+            assertEquals(0, writerBeforeRestart.invalidateWriterForReaderCount, "l'ancien writer RMI ne doit pas être restauré");
+        } finally {
+            resetCoordinatorSingleton();
+            if (previousSnapshotProperty == null) {
+                System.clearProperty("jvn.coord.snapshot");
+            } else {
+                System.setProperty("jvn.coord.snapshot", previousSnapshotProperty);
+            }
+        }
+    }
+
+    private static void resetCoordinatorSingleton() throws Exception {
+        Field coordInstance = JvnCoordImpl.class.getDeclaredField("coordInstance");
+        coordInstance.setAccessible(true);
+        coordInstance.set(null, null);
     }
 
     private static class FakeServer extends UnicastRemoteObject implements JvnRemoteServer {

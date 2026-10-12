@@ -179,4 +179,20 @@ public class JvnObjectImpl implements JvnObject {
     public void setJvnServer(JvnServerImpl jvnServer) {
         this.jvnServer = jvnServer;
     }
+
+    /**
+     * Réinitialise le verrou local après une reconnexion au coordinateur.
+     *
+     * Spécification :
+     * - cette méthode est appelée quand le serveur local détecte que le coordinateur
+     *   a probablement redémarré ;
+     * - les verrous locaux en cache ne sont plus fiables, car le nouveau coordinateur
+     *   ne connaît pas les anciens readers/writers ;
+     * - l'état métier de l'objet est conservé, mais le prochain accès devra redemander
+     *   un verrou propre au coordinateur.
+     */
+    public synchronized void jvnResetLockAfterCoordinatorRecovery() {
+        lockState = LockState.NL;
+        notifyAll();
+    }
 }

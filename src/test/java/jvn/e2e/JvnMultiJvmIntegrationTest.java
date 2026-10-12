@@ -17,6 +17,7 @@ class JvnMultiJvmIntegrationTest {
     private static final String CLASSPATH = "target/classes:target/test-classes";
 
     private final List<ManagedProcess> processes = new ArrayList<ManagedProcess>();
+    private ManagedProcess coordinatorProcess;
 
     @BeforeEach
     void startRmiRegistryAndCoordinator() throws Exception {
@@ -28,9 +29,7 @@ class JvnMultiJvmIntegrationTest {
 
         // Démarre le coordinateur dans une JVM séparée.
         // Le coordinateur publie ensuite son objet distant sous le nom rmi://localhost/Coordinator.
-        ManagedProcess coordinator = startProcess("java", "-cp", CLASSPATH, "jvn.core.JvnCoordImpl");
-        processes.add(coordinator);
-        coordinator.waitForOutput("Javanaise coordinator ready", 5000);
+        coordinatorProcess = startCoordinator(null);
     }
 
     @AfterEach
@@ -137,6 +136,111 @@ class JvnMultiJvmIntegrationTest {
         assertEquals(0, clientB.exitCode(), "le client B du test de charge a échoué:\n" + clientB.output());
     }
 
+    /*
+     * Scénario : un client writer tombe brutalement sans appeler jvnTerminate.
+     *
+     * Actions réalisées :
+     * - un premier client crée un objet et devient writer côté coordinateur ;
+     * - ce client s'arrête avec Runtime.halt, donc le coordinateur garde une référence RMI morte ;
+     * - un second client demande un verrou écriture sur le même objet.
+     *
+     * Résultat attendu :
+     * - le coordinateur tente d'invalider le writer mort ;
+     * - l'appel RMI lève une RemoteException ;
+     * - le coordinateur retire le writer mort et accorde le verrou au second client ;
+     * - le second client écrit une nouvelle valeur et termine correctement.
+     */
+    @Test
+    void deadWriterDoesNotBlockFutureWriter() throws Exception {
+        String name = "E2E_DEAD_WRITER_" + System.nanoTime();
+        String initialValue = "valeur-avant-panne-client";
+        String recoveredValue = "valeur-apres-panne-client";
+
+        ManagedProcess deadWriter = startProcess("java", "-ea", "-cp", CLASSPATH,
+                "jvn.e2e.utils.failures.E2EDeadWriterClient", name, initialValue);
+        processes.add(deadWriter);
+        deadWriter.waitForOutput("DEAD_WRITER_READY", 10000);
+        deadWriter.waitForExit(10000);
+        assertEquals(0, deadWriter.exitCode(), "le writer mort contrôlé a échoué:\n" + deadWriter.output());
+
+        ManagedProcess writerAfterCrash = startProcess("java", "-ea", "-cp", CLASSPATH,
+                "jvn.e2e.utils.failures.E2EWriteAfterDeadWriterClient", name, recoveredValue);
+        processes.add(writerAfterCrash);
+        writerAfterCrash.waitForExit(15000);
+
+        assertEquals(0, writerAfterCrash.exitCode(), "le writer après panne client a échoué:\n" + writerAfterCrash.output());
+    }
+
+    /*
+     * Scénario : un client utilise la version proxy, écrit une valeur, puis tombe brutalement.
+     *
+     * Actions réalisées :
+     * - le client proxy appelle une méthode @JvnWrite ;
+     * - le proxy sauvegarde l'état auprès du coordinateur via jvnUpdateObjectState ;
+     * - le client tombe sans appeler jvnTerminate ;
+     * - un autre client lit l'objet partagé.
+     *
+     * Résultat attendu :
+     * - la lecture doit retrouver la valeur écrite avant la panne ;
+     * - cela prouve que la sauvegarde proxy protège les écritures terminées.
+     */
+    @Test
+    void proxyWriteSurvivesClientCrash() throws Exception {
+        String name = "E2E_PROXY_CRASH_" + System.nanoTime();
+        String expected = "valeur-sauvee-par-proxy";
+
+        ManagedProcess proxyWriter = startProcess("java", "-ea", "-cp", CLASSPATH,
+                "jvn.e2e.utils.failures.E2EProxyWriteAndCrashClient", name, expected);
+        processes.add(proxyWriter);
+        proxyWriter.waitForOutput("PROXY_WRITE_SAVED", 10000);
+        proxyWriter.waitForExit(10000);
+        assertEquals(0, proxyWriter.exitCode(), "le writer proxy contrôlé a échoué:\n" + proxyWriter.output());
+
+        ManagedProcess reader = startProcess("java", "-ea", "-cp", CLASSPATH,
+                "jvn.e2e.utils.failures.E2EProxySavedStateReaderClient", name, expected);
+        processes.add(reader);
+        reader.waitForExit(15000);
+
+        assertEquals(0, reader.exitCode(), "le lecteur de l'état sauvegardé par proxy a échoué:\n" + reader.output());
+    }
+
+    /*
+     * Scénario : le coordinateur tombe puis redémarre avec le même fichier snapshot.
+     *
+     * Actions réalisées :
+     * - on redémarre le coordinateur du test avec un fichier snapshot dédié ;
+     * - un client écrit via proxy, ce qui sauvegarde l'état en mémoire et sur disque ;
+     * - l'orchestrateur tue le coordinateur ;
+     * - l'orchestrateur relance un coordinateur avec le même snapshot ;
+     * - le même client force une reconnexion en faisant un lookup via JvnServerImpl.
+     *
+     * Résultat attendu :
+     * - le client retrouve l'objet et son état après redémarrage du coordinateur ;
+     * - les anciens verrous locaux sont remis à NL avant de redemander un verrou propre.
+     */
+    @Test
+    void coordinatorRestartReloadsSnapshotAndClientReconnects() throws Exception {
+        File snapshotFile = tempSignalFile("javanaise-coord-recovery-snapshot");
+        snapshotFile.delete();
+
+        restartCoordinatorWithSnapshot(snapshotFile);
+
+        String name = "E2E_COORD_RECOVERY_" + System.nanoTime();
+        String expected = "valeur-restauree-apres-redemarrage-coordinateur";
+        File restartSignal = tempSignalFile("javanaise-coord-restarted");
+
+        ManagedProcess client = startProcess("java", "-ea", "-cp", CLASSPATH,
+                "jvn.e2e.utils.failures.E2ECoordinatorRecoveryClient", name, expected, restartSignal.getAbsolutePath());
+        processes.add(client);
+        client.waitForOutput("COORD_RECOVERY_CLIENT_READY", 10000);
+
+        restartCoordinatorWithSnapshot(snapshotFile);
+        restartSignal.createNewFile();
+
+        client.waitForExit(20000);
+        assertEquals(0, client.exitCode(), "le client après redémarrage coordinateur a échoué:\n" + client.output());
+    }
+
     private static File tempSignalFile(String prefix) throws Exception {
         // Crée un nom de fichier temporaire unique, puis supprime le fichier.
         // Le chemin sert ensuite de signal entre processus : tant que le fichier n'existe pas, le client attend.
@@ -144,6 +248,33 @@ class JvnMultiJvmIntegrationTest {
         file.delete();
         file.deleteOnExit();
         return file;
+    }
+
+    private ManagedProcess startCoordinator(File snapshotFile) throws Exception {
+        ManagedProcess coordinator;
+
+        if (snapshotFile == null) {
+            coordinator = startProcess("java", "-cp", CLASSPATH, "jvn.core.JvnCoordImpl");
+        } else {
+            coordinator = startProcess("java", "-Djvn.coord.snapshot=" + snapshotFile.getAbsolutePath(),
+                    "-cp", CLASSPATH, "jvn.core.JvnCoordImpl");
+        }
+
+        processes.add(coordinator);
+        coordinatorProcess = coordinator;
+        coordinator.waitForOutput("Javanaise coordinator ready", 5000);
+        return coordinator;
+    }
+
+    private void restartCoordinatorWithSnapshot(File snapshotFile) throws Exception {
+        if (coordinatorProcess != null) {
+            coordinatorProcess.destroy();
+            processes.remove(coordinatorProcess);
+            coordinatorProcess = null;
+            Thread.sleep(1000);
+        }
+
+        startCoordinator(snapshotFile);
     }
 
     private static ManagedProcess startProcess(String... command) throws Exception {
