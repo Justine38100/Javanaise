@@ -194,6 +194,8 @@ java -Djvn.rmi.server.host=192.168.172.36 \
      --name Coordinator
 ```
 
+Si le coordinateur tourne faire : `rm jvn-coordinator.snapshot`avant.
+
 Sur la machine de Justine, lancer un premier client :
 
 ```bash
