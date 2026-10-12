@@ -169,6 +169,29 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	}	
 
 	/**
+	 * Sauvegarde auprès du coordinateur l'état courant d'un objet modifié localement.
+	 *
+	 * Spécification :
+	 * - cette méthode est appelée par le proxy après une méthode @JvnWrite réussie ;
+	 * - elle ne prend pas de verrou elle-même : le verrou écriture doit déjà être détenu ;
+	 * - elle transmet au coordinateur l'identifiant de l'objet, son état courant et ce serveur local ;
+	 * - elle permet au coordinateur de conserver une version récente sans attendre une invalidation.
+	 *
+	 * @param joi l'identifiant de l'objet JVN
+	 * @param state l'état courant à sauvegarder
+	 * @throws JvnException si la sauvegarde auprès du coordinateur échoue
+	 */
+	public void jvnUpdateObjectState(int joi, Serializable state) throws JvnException {
+		try {
+			// Relais local utilisé par le proxy : après une écriture réussie,
+			// le serveur transmet l'état courant au coordinateur pour le sauvegarder.
+			jvnCoord.jvnUpdateObjectState(joi, state, this);
+		} catch (Exception e) {
+			throw new jvn.core.JvnException("We can't update the JVN object state", e);
+		}
+	}
+
+	/**
 	* Invalidate the Read lock of the JVN object identified by id
 	* called by the JvnCoord
 	* @param joi : the JVN object id

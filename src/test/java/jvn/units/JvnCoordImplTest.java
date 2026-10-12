@@ -2,6 +2,7 @@ package jvn.units;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.Serializable;
 import java.rmi.RemoteException;
@@ -168,6 +169,33 @@ class JvnCoordImplTest {
 
         assertEquals(1, deadWriter.invalidateWriterCount, "le coordinateur doit tenter d'invalider l'écrivain mort");
         assertEquals("last-coordinator-state", state, "le nouveau writer reçoit le dernier état connu du coordinateur");
+    }
+
+    /*
+     * Scénario : le serveur qui possède le verrou écriture sauvegarde son état auprès du coordinateur.
+     * Le coordinateur doit accepter la mise à jour du writer courant,
+     * puis refuser une mise à jour venant d'un serveur qui n'est pas writer.
+     */
+    @Test
+    void onlyCurrentWriterCanUpdateObjectState() throws Exception {
+        JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
+        FakeServer writer = new FakeServer("writer-state");
+        FakeServer otherServer = new FakeServer("other-state");
+        int id = coord.jvnGetObjectId();
+        JvnObject object = new JvnObjectImpl(id, "initial-state", null, true);
+        String name = "TEST_UPDATE_STATE_" + id;
+
+        coord.jvnRegisterObject(name, object, writer);
+        coord.jvnUpdateObjectState(id, "state-saved-by-writer", writer);
+
+        JvnObject lookedUp = coord.jvnLookupObject(name, otherServer);
+        assertEquals("state-saved-by-writer", lookedUp.jvnGetObjectState(), "le writer courant doit pouvoir sauvegarder l'état");
+
+        assertThrows(
+            JvnException.class,
+            () -> coord.jvnUpdateObjectState(id, "stale-state", otherServer),
+            "un serveur qui n'est pas writer ne doit pas écraser l'état"
+        );
     }
 
     private static class FakeServer extends UnicastRemoteObject implements JvnRemoteServer {

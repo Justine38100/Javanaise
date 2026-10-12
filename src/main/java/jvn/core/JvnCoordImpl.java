@@ -194,6 +194,37 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     return objectStates.get(joi);
   }
 
+  /**
+   * Sauvegarde le dernier état connu d'un objet après une écriture réussie.
+   *
+   * Spécification :
+   * - seul le serveur actuellement enregistré comme écrivain de l'objet peut appeler cette méthode ;
+   * - si le serveur appelant n'est pas le writer courant, la mise à jour est refusée ;
+   * - si la mise à jour est acceptée, objectStates devient la copie de sauvegarde du coordinateur ;
+   * - cette sauvegarde ne remplace pas le protocole de verrouillage : elle complète le cache en
+   *   limitant la perte de données si un client tombe après une méthode @JvnWrite.
+   *
+   * @param joi l'identifiant de l'objet JVN
+   * @param state l'état courant à sauvegarder
+   * @param js le serveur qui demande la sauvegarde
+   * @throws RemoteException si l'appel RMI échoue
+   * @throws JvnException si le serveur appelant n'est pas le writer courant
+   */
+  public synchronized void jvnUpdateObjectState(int joi, Serializable state, JvnRemoteServer js) throws RemoteException, JvnException {
+    // Seul le serveur qui possède actuellement le verrou d'écriture a le droit
+    // de sauvegarder l'état. Cela évite qu'un ancien client écrase l'objet avec
+    // une version périmée après avoir perdu son verrou.
+    JvnRemoteServer currentWriter = writersMap.get(joi);
+
+    if (currentWriter == null || !currentWriter.equals(js)) {
+      throw new JvnException("Only the current writer can update the object state", null);
+    }
+
+    // On mémorise l'état envoyé par le proxy après une méthode @JvnWrite réussie.
+    // Si le client tombe ensuite en panne, le coordinateur garde déjà cette version.
+    objectStates.put(joi, state);
+  }
+
 	/**
 	* A JVN server terminates
 	* @param js  : the remote reference of the server

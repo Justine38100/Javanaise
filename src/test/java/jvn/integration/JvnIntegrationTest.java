@@ -13,6 +13,9 @@ import org.junit.jupiter.api.Test;
 import jvn.core.JvnCoordImpl;
 import jvn.core.JvnObject;
 import jvn.core.JvnServerImpl;
+import jvn.proxy.JvnProxy;
+import irc.model.Sentence;
+import irc.model.SentenceItf;
 
 class JvnIntegrationTest {
 
@@ -68,6 +71,29 @@ class JvnIntegrationTest {
         object.jvnLockRead();
         assertEquals("apres", ((MutableValue) object.jvnGetObjectState()).value, "la lecture doit voir l'état écrit");
         object.jvnUnLock();
+    }
+
+    /*
+     * Scénario : on utilise la version 2 avec proxy dynamique.
+     * Une méthode annotée @JvnWrite est appelée sur l'objet partagé.
+     * Le proxy doit écrire localement, sauvegarder l'état auprès du coordinateur,
+     * puis un lookup doit retrouver cet état sans attendre une invalidation future.
+     */
+    @Test
+    void proxyWriteSavesStateToCoordinator() throws Exception {
+        JvnServerImpl server = JvnServerImpl.jvnGetServer();
+        String name = "INTEGRATION_PROXY_SAVE_" + System.nanoTime();
+
+        SentenceItf sentence = (SentenceItf) JvnProxy.newInstance(new Sentence(), name);
+        sentence.write("etat-sauvegarde-par-proxy");
+
+        JvnObject lookedUp = server.jvnLookupObject(name);
+        assertNotNull(lookedUp, "l'objet proxy doit être enregistré côté coordinateur");
+        assertEquals(
+            "etat-sauvegarde-par-proxy",
+            ((SentenceItf) lookedUp.jvnGetObjectState()).read(),
+            "le coordinateur doit connaître l'état écrit par le proxy"
+        );
     }
 
     private static void startRegistryIfNeeded() throws Exception {

@@ -14,9 +14,14 @@ import jvn.core.JvnServerImpl;
 public class JvnProxy implements InvocationHandler {
     
     private JvnObject jvnObject;
+    
+    // Le proxy garde aussi le serveur local pour pouvoir sauvegarder l'état
+    // auprès du coordinateur après chaque méthode annotée @JvnWrite.
+    private JvnServerImpl jvnServer;
 
-    private JvnProxy(JvnObject jvnObject) {
+    private JvnProxy(JvnObject jvnObject, JvnServerImpl jvnServer) {
         this.jvnObject = jvnObject;
+        this.jvnServer = jvnServer;
     }
     
     /**
@@ -52,10 +57,23 @@ public class JvnProxy implements InvocationHandler {
         return Proxy.newProxyInstance(
             obj.getClass().getClassLoader(),
             interfaces,
-            new JvnProxy(jvnObject)
+            new JvnProxy(jvnObject, jvnServer)
         );
     }
     
+    /**
+     * Intercepte les appels faits sur l'objet métier partagé.
+     *
+     * Spécification :
+     * - une méthode annotée @JvnRead déclenche un verrou lecture avant l'appel métier ;
+     * - une méthode annotée @JvnWrite déclenche un verrou écriture avant l'appel métier ;
+     * - après une méthode @JvnWrite réussie, le proxy sauvegarde l'état courant auprès du coordinateur ;
+     * - le verrou est toujours relâché en fin d'appel, même si la méthode métier lève une exception ;
+     * - si une méthode métier n'est annotée ni @JvnRead ni @JvnWrite, l'appel est refusé.
+     *
+     * La sauvegarde améliore la tolérance aux pannes : si le client tombe après la fin
+     * d'une écriture proxy, le coordinateur possède déjà le dernier état écrit.
+     */
     @Override 
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         // Les méthodes de Object ne décrivent pas un accès à l'objet partagé.
@@ -65,6 +83,7 @@ public class JvnProxy implements InvocationHandler {
         }
 
         boolean lockTaken = false;
+        boolean writeLockTaken = false;
 
         if (method.isAnnotationPresent(JvnRead.class)) {
             jvnObject.jvnLockRead();
@@ -72,12 +91,24 @@ public class JvnProxy implements InvocationHandler {
         } else if (method.isAnnotationPresent(JvnWrite.class)) {
             jvnObject.jvnLockWrite();
             lockTaken = true;
+            writeLockTaken = true;
         } else {
             throw new IllegalStateException("La méthode " + method.getName() + " doit être annotée avec @JvnRead ou @JvnWrite.");
         }
 
         try {
-            return method.invoke(jvnObject.jvnGetObjectState(), args);
+            Object result = method.invoke(jvnObject.jvnGetObjectState(), args);
+
+            if (writeLockTaken) {
+                // La méthode métier vient de modifier l'objet localement.
+                // On pousse donc l'état à jour vers le coordinateur avant de libérer le verrou.
+                jvnServer.jvnUpdateObjectState(
+                    jvnObject.jvnGetObjectId(),
+                    jvnObject.jvnGetObjectState()
+                );
+            }
+
+            return result;
         } catch (InvocationTargetException e) {
             throw e.getCause();
         } finally {
