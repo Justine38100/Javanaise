@@ -28,7 +28,7 @@ class JvnMultiJvmIntegrationTest {
         Thread.sleep(1000);
 
         // Démarre le coordinateur dans une JVM séparée.
-        // Le coordinateur publie ensuite son objet distant sous le nom rmi://localhost/Coordinator.
+        // Le coordinateur publie ensuite son objet distant avec la configuration RMI du test.
         coordinatorProcess = startCoordinator(null);
     }
 
@@ -280,10 +280,31 @@ class JvnMultiJvmIntegrationTest {
     private static ManagedProcess startProcess(String... command) throws Exception {
         // Lance un processus externe, comme si on exécutait la commande dans un terminal.
         // stdout et stderr sont fusionnés pour simplifier le diagnostic si le test échoue.
-        ProcessBuilder builder = new ProcessBuilder(command);
+        ProcessBuilder builder = new ProcessBuilder(withLocalRmiConfiguration(command));
         builder.directory(new File("."));
         builder.redirectErrorStream(true);
         return new ManagedProcess(builder.start(), command);
+    }
+
+    private static String[] withLocalRmiConfiguration(String[] command) {
+        // Les tests e2e doivent rester reproductibles même si la machine de développement
+        // définit des variables d'environnement JVN_COORD_HOST ou JVN_COORD_PORT.
+        // On force donc explicitement la configuration locale pour les JVM de test.
+        if (command.length == 0 || !"java".equals(command[0])) {
+            return command;
+        }
+
+        String[] configuredCommand = new String[command.length + 3];
+        configuredCommand[0] = command[0];
+        configuredCommand[1] = "-Djvn.coord.host=localhost";
+        configuredCommand[2] = "-Djvn.coord.port=1099";
+        configuredCommand[3] = "-Djvn.coord.name=Coordinator";
+
+        for (int i = 1; i < command.length; i++) {
+            configuredCommand[i + 3] = command[i];
+        }
+
+        return configuredCommand;
     }
 
     private static class ManagedProcess {

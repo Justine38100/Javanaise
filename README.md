@@ -5,6 +5,7 @@
 - [Architecture](#architecture)
 - [Maven](#maven)
 - [Compilation](#compilation)
+- [Configuration RMI](#configuration-rmi)
 - [Lancement Manuel](#lancement-manuel)
 - [Tests](#tests)
 - [Tests E2E](#tests-e2e)
@@ -66,6 +67,42 @@ target/classes
 target/test-classes
 ```
 
+## Configuration RMI
+
+Par défaut, Javanaise utilise la configuration locale :
+
+```text
+jvn.coord.host=localhost
+jvn.coord.port=1099
+jvn.coord.name=Coordinator
+```
+
+Ces valeurs peuvent être changées avec des propriétés Java :
+
+```bash
+java -Djvn.coord.host=machine-coordinateur \
+     -Djvn.coord.port=1099 \
+     -Djvn.coord.name=Coordinator \
+     -cp target/classes irc.version2.Irc2
+```
+
+Ou avec des variables d'environnement :
+
+```bash
+export JVN_COORD_HOST=machine-coordinateur
+export JVN_COORD_PORT=1099
+export JVN_COORD_NAME=Coordinator
+```
+
+Paramètres disponibles :
+
+- `jvn.coord.host` / `JVN_COORD_HOST` : machine sur laquelle se trouve le registre RMI du coordinateur.
+- `jvn.coord.port` / `JVN_COORD_PORT` : port du registre RMI.
+- `jvn.coord.name` / `JVN_COORD_NAME` : nom RMI sous lequel le coordinateur est publié.
+- `jvn.rmi.server.host` / `JVN_RMI_SERVER_HOST` : adresse annoncée par l'objet RMI exporté sur la machine courante.
+
+Le dernier paramètre est important si les machines sont différentes. Il permet aux autres machines de rappeler correctement le coordinateur ou un serveur local.
+
 ## Lancement Manuel
 
 Arrêter les anciens processus RMI / Javanaise :
@@ -89,10 +126,21 @@ Lancer le registre RMI :
 rmiregistry -J-Djava.class.path=target/classes &
 ```
 
-Lancer le coordinateur :
+Lancer le coordinateur en local :
 
 ```bash
 java -cp target/classes jvn.core.JvnCoordImpl
+```
+
+Lancer le coordinateur avec une configuration explicite :
+
+```bash
+java -Djvn.rmi.server.host=machine-coordinateur \
+     -cp target/classes \
+     jvn.core.JvnCoordImpl \
+     --host machine-coordinateur \
+     --port 1099 \
+     --name Coordinator
 ```
 
 Dans un autre terminal, lancer un client IRC version 1 :
@@ -107,7 +155,68 @@ Ou lancer un client IRC version 2 avec proxy dynamique :
 java -cp target/classes irc.version2.Irc2
 ```
 
-Pour tester le partage, lancer un deuxieme client dans un autre terminal.
+Depuis une autre machine, indiquer où se trouve le coordinateur :
+
+```bash
+java -Djvn.coord.host=machine-coordinateur \
+     -Djvn.coord.port=1099 \
+     -Djvn.coord.name=Coordinator \
+     -Djvn.rmi.server.host=machine-client \
+     -cp target/classes \
+     irc.version2.Irc2
+```
+
+Exemple concret avec plusieurs ordinateurs sur le même réseau Wi-Fi :
+
+```text
+Machine Justine : 192.168.172.36
+Machine Lisa    : 192.168.172.136
+Machine Adrien  :
+```
+
+Dans cet exemple, le registre RMI et le coordinateur tournent sur la machine de Justine.
+
+Sur la machine de Justine, compiler puis lancer le registre RMI :
+
+```bash
+mvn compile
+rmiregistry -J-Djava.class.path=target/classes &
+```
+
+Toujours sur la machine de Justine, lancer le coordinateur :
+
+```bash
+java -Djvn.rmi.server.host=192.168.172.36 \
+     -cp target/classes \
+     jvn.core.JvnCoordImpl \
+     --host 192.168.172.36 \
+     --port 1099 \
+     --name Coordinator
+```
+
+Sur la machine de Justine, lancer un premier client :
+
+```bash
+java -Djvn.coord.host=192.168.172.36 \
+     -Djvn.coord.port=1099 \
+     -Djvn.coord.name=Coordinator \
+     -Djvn.rmi.server.host=192.168.172.36 \
+     -cp target/classes \
+     irc.version2.Irc2
+```
+
+Sur la machine d'Lisa, lancer un deuxième client :
+
+```bash
+java -Djvn.coord.host=192.168.172.36 \
+     -Djvn.coord.port=1099 \
+     -Djvn.coord.name=Coordinator \
+     -Djvn.rmi.server.host=192.168.172.136 \
+     -cp target/classes \
+     irc.version2.Irc2
+```
+
+Ici, les deux clients se connectent au même coordinateur `192.168.172.36:1099/Coordinator`, mais chacun annonce sa propre adresse avec `jvn.rmi.server.host`.
 
 ## Tests
 

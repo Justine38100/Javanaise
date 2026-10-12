@@ -20,6 +20,10 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	
 	private static final long serialVersionUID = 1L;
 
+	static {
+		JvnRmiConfig.configureExportedHostIfProvided();
+	}
+
 	// A JVN server is managed as a singleton 
 	private static JvnServerImpl js = null;
 
@@ -223,7 +227,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	 * @throws Exception si le lookup échoue
 	 */
 	private JvnRemoteCoord lookupCoordinator() throws Exception {
-		return (JvnRemoteCoord) java.rmi.Naming.lookup("rmi://localhost/Coordinator");
+		return (JvnRemoteCoord) java.rmi.Naming.lookup(JvnRmiConfig.coordinatorUrl());
 	}
 
 	/**

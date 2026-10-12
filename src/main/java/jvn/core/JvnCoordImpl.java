@@ -27,6 +27,10 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 
 	private static final long serialVersionUID = 1L;
 
+  static {
+    JvnRmiConfig.configureExportedHostIfProvided();
+  }
+
   private static final String SNAPSHOT_FILE_PROPERTY = "jvn.coord.snapshot";
 
   private static final String DEFAULT_SNAPSHOT_FILE = "jvn-coordinator.snapshot";
@@ -424,11 +428,31 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 
   public static void main(String[] args) {
     try {
+      applyCommandLineArguments(args);
+      JvnRmiConfig.configureExportedHostIfProvided();
       JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
-      Naming.rebind("rmi://localhost/Coordinator", coord);
-      System.out.println("Javanaise coordinator ready");
+      Naming.rebind(JvnRmiConfig.coordinatorUrl(), coord);
+      System.out.println("Javanaise coordinator ready on " + JvnRmiConfig.coordinatorUrl());
     } catch (Exception e) {
       e.printStackTrace();
+    }
+  }
+
+  private static void applyCommandLineArguments(String[] args) {
+    for (int i = 0; i < args.length; i++) {
+      if ("--host".equals(args[i]) && i + 1 < args.length) {
+        System.setProperty(JvnRmiConfig.COORD_HOST_PROPERTY, args[++i]);
+      } else if ("--port".equals(args[i]) && i + 1 < args.length) {
+        System.setProperty(JvnRmiConfig.COORD_PORT_PROPERTY, args[++i]);
+      } else if ("--name".equals(args[i]) && i + 1 < args.length) {
+        System.setProperty(JvnRmiConfig.COORD_NAME_PROPERTY, args[++i]);
+      } else if ("--export-host".equals(args[i]) && i + 1 < args.length) {
+        System.setProperty(JvnRmiConfig.RMI_SERVER_HOST_PROPERTY, args[++i]);
+      } else if ("--snapshot".equals(args[i]) && i + 1 < args.length) {
+        System.setProperty(SNAPSHOT_FILE_PROPERTY, args[++i]);
+      } else {
+        throw new IllegalArgumentException("Argument inconnu ou incomplet: " + args[i]);
+      }
     }
   }
 }

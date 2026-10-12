@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import jvn.core.JvnCoordImpl;
 import jvn.core.JvnObject;
+import jvn.core.JvnRmiConfig;
 import jvn.core.JvnServerImpl;
 import jvn.proxy.JvnProxy;
 import irc.model.Sentence;
@@ -98,7 +99,7 @@ class JvnIntegrationTest {
 
     private static void startRegistryIfNeeded() throws Exception {
         try {
-            LocateRegistry.createRegistry(1099);
+            LocateRegistry.createRegistry(JvnRmiConfig.coordinatorPort());
         } catch (Exception e) {
             // Le registre existe déjà, on le réutilise.
         }
@@ -106,7 +107,7 @@ class JvnIntegrationTest {
 
     private static void bindCoordinator() throws Exception {
         JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
-        Naming.rebind("rmi://localhost/Coordinator", coord);
+        Naming.rebind(JvnRmiConfig.coordinatorUrl(), coord);
     }
 
     private static class MutableValue implements java.io.Serializable {
