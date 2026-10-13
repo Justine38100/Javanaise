@@ -9,6 +9,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import irc.model.Paragraph;
+import irc.model.ParagraphItf;
+import irc.model.Sentence;
+import irc.model.SentenceItf;
+import jvn.proxy.JvnProxy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -239,6 +244,77 @@ class JvnMultiJvmIntegrationTest {
 
         client.waitForExit(20000);
         assertEquals(0, client.exitCode(), "le client après redémarrage coordinateur a échoué:\n" + client.output());
+    }
+
+    @Test
+    void paragraphContainingSentenceReference() throws Exception {
+        String sentenceName = "MULTI_JVM_SENTENCE_" + System.nanoTime();
+        String paragraphName = "MULTI_JVM_PARAGRAPH_" + System.nanoTime();
+
+        SentenceItf sentence = (SentenceItf) JvnProxy.newInstance(new Sentence(), sentenceName);
+
+        sentence.write("Hello");
+
+        ParagraphItf paragraph = (ParagraphItf) JvnProxy.newInstance(new Paragraph(), paragraphName);
+
+        paragraph.addSentence(sentence);
+
+        assertEquals("Hello", paragraph.read(), "la lecture du paragraphe doit inclure la phrase partagée");
+
+        sentence.write("Hello world!");
+
+        assertEquals("Hello world!", paragraph.read(), "la lecture du paragraphe doit inclure la phrase partagée mise à jour");
+    }
+
+    @Test
+    void testTwoSeparateJvmsConsistency() throws Exception {
+        String testId = String.valueOf(System.nanoTime());
+        String javaBin = System.getProperty("java.home") + "/bin/java";
+
+        // 1. Lancement de la JVM 1 (Writer)
+        ProcessBuilder pb1 = new ProcessBuilder(
+                javaBin, "-cp", CLASSPATH, "jvn.e2e.utils.references.RunnerWriter", testId
+        );
+        Process pWriter = pb1.start();
+        java.io.BufferedReader writerOut = new java.io.BufferedReader(
+                new java.io.InputStreamReader(pWriter.getInputStream())
+        );
+
+        // Attente que le Writer soit prêt
+        String line;
+        while ((line = writerOut.readLine()) != null) {
+            if ("READY_STEP_1".equals(line)) {
+                break;
+            }
+        }
+
+        // 2. Lancement de la JVM 2 (Reader)
+        ProcessBuilder pb2 = new ProcessBuilder(
+                javaBin, "-cp", CLASSPATH, "jvn.e2e.utils.references.RunnerReader", testId
+        );
+        Process pReader = pb2.start();
+        java.io.BufferedReader readerOut = new java.io.BufferedReader(
+                new java.io.InputStreamReader(pReader.getInputStream())
+        );
+
+        // Récupération des deux sorties lues par le Reader
+        String firstRead = null;
+        String secondRead = null;
+
+        while ((line = readerOut.readLine()) != null) {
+            if (line.startsWith("READ_1:")) {
+                firstRead = line.substring("READ_1:".length());
+            } else if (line.startsWith("READ_2:")) {
+                secondRead = line.substring("READ_2:".length());
+            }
+        }
+
+        pReader.waitFor();
+        pWriter.destroy();
+
+        // 3. Assertions JUnit
+        assertEquals("Bonjour", firstRead, "La JVM 2 doit lire la valeur initiale 'Bonjour'");
+        assertEquals("Monde", secondRead, "La JVM 2 doit voir l'invalidation et lire 'Monde'");
     }
 
     private static File tempSignalFile(String prefix) throws Exception {

@@ -344,6 +344,18 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				throw new jvn.core.JvnException("Erreur lors de la réduction du verrou d'écriture sur l'objet JVN", e);
 			}
 		};
+
+	public synchronized JvnObject jvnGetOrCreateLocalObject(int joi) {
+		JvnObject jo = jvnObjectsMap.get(joi);
+		if (jo == null) {
+			// L'objet arrive pour la première fois sur cette machine :
+			// on crée son wrapper local sans verrou (NL).
+			// Son état réel sera demandé au coordinateur au premier appel de méthode.
+			jo = new JvnObjectImpl(joi, null, this, false);
+			jvnObjectsMap.put(joi, jo);
+		}
+		return jo;
+	}
 }
 
  

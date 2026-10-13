@@ -1,5 +1,6 @@
 package jvn.proxy;
 
+import java.io.ObjectStreamException;
 import java.io.Serializable;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
@@ -8,19 +9,26 @@ import java.lang.reflect.Proxy;
 
 import jvn.annotations.JvnRead;
 import jvn.annotations.JvnWrite;
+import jvn.core.JvnException;
 import jvn.core.JvnObject;
 import jvn.core.JvnServerImpl;
 
-public class JvnProxy implements InvocationHandler {
-    
+public class JvnProxy implements InvocationHandler, Serializable {
+
+    private static final long serialVersionUID = 1L;
+
     private JvnObject jvnObject;
-    
+
     // Le proxy garde aussi le serveur local pour pouvoir sauvegarder l'état
     // auprès du coordinateur après chaque méthode annotée @JvnWrite.
     private JvnServerImpl jvnServer;
 
+
+    private int objectId;
+
     private JvnProxy(JvnObject jvnObject, JvnServerImpl jvnServer) {
         this.jvnObject = jvnObject;
+        this.objectId = jvnObject.jvnGetObjectId();
         this.jvnServer = jvnServer;
     }
     
@@ -60,7 +68,18 @@ public class JvnProxy implements InvocationHandler {
             new JvnProxy(jvnObject, jvnServer)
         );
     }
-    
+
+    private Object readResolve() throws ObjectStreamException {
+        try {
+            JvnServerImpl server = JvnServerImpl.jvnGetServer();
+            // On demande au serveur local l'objet associé à cet identifiant
+            this.jvnObject = server.jvnGetOrCreateLocalObject(this.objectId);
+            return this;
+        } catch (Exception e) {
+            throw new java.io.InvalidObjectException("Impossible de reconnecter le proxy local : " + e.getMessage());
+        }
+    }
+
     /**
      * Intercepte les appels faits sur l'objet métier partagé.
      *
@@ -74,7 +93,7 @@ public class JvnProxy implements InvocationHandler {
      * La sauvegarde améliore la tolérance aux pannes : si le client tombe après la fin
      * d'une écriture proxy, le coordinateur possède déjà le dernier état écrit.
      */
-    @Override 
+    @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         // Les méthodes de Object ne décrivent pas un accès à l'objet partagé.
         // On les traite donc sans verrou JVN.
