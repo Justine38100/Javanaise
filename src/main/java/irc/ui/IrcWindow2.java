@@ -30,7 +30,8 @@ public class IrcWindow2 {
             Runnable writeSentenceAction,
             Runnable readParagraphAction,
             Runnable appendParagraphAction,
-            Runnable removeLastSentenceFromParagraphAction)
+            Runnable removeLastSentenceFromParagraphAction,
+            Runnable updateSentenceAction)
     {
 
         frame = new JFrame(title);
@@ -60,6 +61,9 @@ public class IrcWindow2 {
         JButton removeLastSentenceFromParagraphBtn = new JButton("Supprimer la dernière phrase");
         removeLastSentenceFromParagraphBtn.addActionListener(e -> removeLastSentenceFromParagraphAction.run());
 
+        JButton updateSentenceBtn = new JButton("Modifier phrase (idx:txt)");
+        updateSentenceBtn.addActionListener(e -> updateSentenceAction.run());
+
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
         controls.add(input);
         controls.add(readSentenceBtn);
@@ -67,6 +71,7 @@ public class IrcWindow2 {
         controls.add(readParagraphBtn);
         controls.add(appendParagraphBtn);
         controls.add(removeLastSentenceFromParagraphBtn);
+        controls.add(updateSentenceBtn);
 
         frame.add(new JScrollPane(messages), BorderLayout.CENTER);
         frame.add(controls, BorderLayout.SOUTH);

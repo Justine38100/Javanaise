@@ -39,7 +39,8 @@ public class Irc3 {
                 this::writeSentence,
                 this::readParagraph,
                 this::addToParagraph,
-                this::removeLastSentenceFromParagraph
+                this::removeLastSentenceFromParagraph,
+                this::updateSentenceInParagraph
         );
 
         JvnEventBus.addListener(window::appendFailureEvent);
@@ -109,6 +110,37 @@ public class Irc3 {
             window.setInputText("");
         } catch (Exception e) {
             window.appendFailureEvent("Ajout au paragraphe impossible : " + e.getMessage());
+        }
+    }
+
+    private void updateSentenceInParagraph() {
+        try {
+            String input = window.getInputText();
+            if (input == null || !input.contains(":")) {
+                window.appendFailureEvent("Format attendu pour modifier : <index>:<texte> (ex: 0:Bonjour)");
+                return;
+            }
+
+            String[] parts = input.split(":", 2);
+            int index = Integer.parseInt(parts[0].trim());
+            String newText = parts[1].trim();
+
+            // 1. Lecture du proxy de la phrase cible via le paragraphe
+            SentenceItf targetSentence = paragraph.getSentence(index);
+            if (targetSentence == null) {
+                window.appendFailureEvent("Aucune phrase à l'index " + index);
+                return;
+            }
+
+            // 2. Écriture sur la phrase cible (verrou posé uniquement sur Sentence !)
+            targetSentence.write(newText);
+
+            window.appendParagraphMessage("Phrase [" + index + "] modifiée en : \"" + newText + "\"");
+            window.setInputText("");
+        } catch (NumberFormatException e) {
+            window.appendFailureEvent("L'index doit être un entier valide.");
+        } catch (Exception e) {
+            window.appendFailureEvent("Modification impossible : " + e.getMessage());
         }
     }
 }

@@ -70,9 +70,9 @@ public class JvnProxy implements InvocationHandler, Serializable {
 
     private Object readResolve() throws ObjectStreamException {
         try {
-            JvnServerImpl server = JvnServerImpl.jvnGetServer();
+            this.jvnServer = JvnServerImpl.jvnGetServer();
             // On demande au serveur local l'objet associé à cet identifiant
-            this.jvnObject = server.jvnGetOrCreateLocalObject(this.objectId);
+            this.jvnObject = jvnServer.jvnGetOrCreateLocalObject(this.objectId);
             return this;
         } catch (Exception e) {
             throw new java.io.InvalidObjectException("Impossible de reconnecter le proxy local : " + e.getMessage());

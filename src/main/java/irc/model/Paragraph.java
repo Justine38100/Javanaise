@@ -27,6 +27,19 @@ public class Paragraph implements ParagraphItf, Serializable {
     }
 
     @Override
+    public SentenceItf getSentence(int index) {
+        if (index >= 0 && index < sentences.size()) {
+            return sentences.get(index);
+        }
+        return null;
+    }
+
+    @Override
+    public int size() {
+        return sentences.size();
+    }
+
+    @Override
     public String read() {
         StringBuilder paragraphText = new StringBuilder();
         for (SentenceItf sentence : sentences) {

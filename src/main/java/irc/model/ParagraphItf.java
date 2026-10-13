@@ -12,5 +12,11 @@ public interface ParagraphItf {
     void removeLastSentence();
 
     @JvnRead
+    SentenceItf getSentence(int index);
+
+    @JvnRead
+    int size();
+
+    @JvnRead
     String read();
 }
