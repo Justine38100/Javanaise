@@ -21,12 +21,11 @@ public class JvnProxy implements InvocationHandler, Serializable {
 
     // Le proxy garde aussi le serveur local pour pouvoir sauvegarder l'état
     // auprès du coordinateur après chaque méthode annotée @JvnWrite.
-    private JvnServerImpl jvnServer;
-
+    private transient JvnServerImpl jvnServer;
 
     private int objectId;
 
-    private JvnProxy(JvnObject jvnObject, JvnServerImpl jvnServer) {
+    private JvnProxy(JvnObject jvnObject, JvnServerImpl jvnServer) throws JvnException {
         this.jvnObject = jvnObject;
         this.objectId = jvnObject.jvnGetObjectId();
         this.jvnServer = jvnServer;
