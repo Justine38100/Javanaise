@@ -267,6 +267,8 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   }
 
   private void removeDeadServer(JvnRemoteServer js) {
+    JvnEventBus.publish("client Javanaise en panne ou déconnecté : " + js);
+
     // On retire le serveur de toutes les listes de lecteurs et écrivains.
     for (HashSet<JvnRemoteServer> readers : readersMap.values()) {
       readers.remove(js);
@@ -310,6 +312,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     // On regarde si le fichier de snapshot existe. 
     // S'il n'existe pas, on ne fait rien et on reste avec un coordinateur vide.
     if (!snapshotFile.exists()) {
+      JvnEventBus.publish("coordinateur démarré sans fichier de snapshot");
       return;
     }
 
@@ -320,6 +323,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
       this.nameToIdMap = snapshot.nameToIdMap;
       this.objectStates = snapshot.objectStates;
       rebuildLockMapsAfterRecovery();
+      JvnEventBus.publish("coordinateur redémarré avec le fichier de snapshot " + snapshotFile.getPath());
     } catch (Exception e) {
       throw new JvnException("Impossible de charger le snapshot du coordinateur", e);
     }

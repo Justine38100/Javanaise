@@ -43,6 +43,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 		super();
 		this.jvnCoord = lookupCoordinator();
 		this.jvnObjectsMap = new HashMap<Integer, JvnObject>();
+		JvnEventBus.publish("serveur local connecté au coordinateur " + JvnRmiConfig.coordinatorUrl());
 	}
 	
 	/**
@@ -212,10 +213,14 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				throw new jvn.core.JvnException(errorMessage, firstFailure);
 			}
 
+			JvnEventBus.publish("coordinateur indisponible, tentative de reconnexion");
+
 			try {
 				reconnectCoordinatorAfterFailure();
+				JvnEventBus.publish("reconnexion au coordinateur réussie");
 				return call.execute();
 			} catch (Exception secondFailure) {
+				JvnEventBus.publish("reconnexion au coordinateur échouée : " + secondFailure.getMessage());
 				throw new jvn.core.JvnException(errorMessage, secondFailure);
 			}
 		}
@@ -237,6 +242,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	private void reconnectCoordinatorAfterFailure() throws Exception {
 		this.jvnCoord = lookupCoordinator();
 		resetLocalLocksAfterCoordinatorRecovery();
+		JvnEventBus.publish("verrous locaux remis à NL après redémarrage du coordinateur");
 	}
 
 	/**
