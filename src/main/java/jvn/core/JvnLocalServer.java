@@ -68,7 +68,11 @@ public interface JvnLocalServer {
     * @throws JvnException
     **/
    public  void jvnTerminate()
-   throws jvn.core.JvnException; 
+   throws jvn.core.JvnException;
+
+	public void jvnFlush(int joi) throws jvn.core.JvnException;
+	
+	public void jvnFlushAll() throws jvn.core.JvnException;
 }
 
  

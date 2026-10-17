@@ -65,7 +65,10 @@ public class JvnObjectImpl implements JvnObject {
         // Si le thread a déjà acquis ce verrou, cette méthode ne fait rien.
         // Si un autre thread a déjà acquis le verrou, le thread courant attend que le verrou soit libéré.
         acquireInvocationScope();
-
+        // Réflechir à quoi ça sert
+        if (jvnServer != null) {
+            jvnServer.touchObject(objectId);
+        }
         try {
             // Cette synchronisation est nécessaire pour les modifications internes
             // qui surviennent dans les callbacks RMI du coordinateur (ex : jvnInvalidateReader(), jvnInvalidateWriter(), jvnInvalidateWriterForReader()).
@@ -124,7 +127,11 @@ public class JvnObjectImpl implements JvnObject {
     public void jvnLockWrite() throws JvnException {
         // Idem que pour jvnLockRead() : on essaie d'acquérir le verrou d'invocation pour le thread courant.
         acquireInvocationScope();
-
+        
+        // Réflechir à quoi ça sert
+        if (jvnServer != null) {
+            jvnServer.touchObject(objectId);
+        }
         try {
 
             // Cette synchronisation est nécessaire pour les modifications internes
@@ -433,5 +440,47 @@ public class JvnObjectImpl implements JvnObject {
     public synchronized void jvnResetLockAfterCoordinatorRecovery() {
         lockState = LockState.NL;
         notifyAll();
+    }
+
+    public void jvnFlush() throws JvnException {
+        Serializable stateToSend = null;
+        boolean needsFlush = false;
+
+        synchronized (this) {
+            try {
+                // Attendre la fin d'une utilisation active par l'application
+                while (lockState == LockState.R || lockState == LockState.W || lockState == LockState.RWC) {
+                    wait();
+                }
+
+                if (lockState == LockState.RC) {
+                    needsFlush = true;
+                } else if (lockState == LockState.WC) {
+                    needsFlush = true;
+                    stateToSend = objectState;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new JvnException("Interrupted while flushing object " + objectId, e);
+            }
+        }
+
+        if (needsFlush) {
+            try {
+                // Appel RMI distant hors du bloc synchronized
+                jvnServer.getCoord().jvnFlush(objectId, jvnServer, stateToSend);
+            } catch (java.rmi.RemoteException e) {
+                throw new JvnException("Remote error while flushing object " + objectId, e);
+            }
+
+            synchronized (this) {
+                lockState = LockState.NL;
+                notifyAll();
+            }
+        }
+    }
+    
+    public synchronized boolean isLockHeld() {
+        return lockState == LockState.R || lockState == LockState.W || lockState == LockState.RWC;
     }
 }

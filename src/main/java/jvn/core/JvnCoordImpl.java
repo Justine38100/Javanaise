@@ -10,6 +10,7 @@ package jvn.core;
 import java.rmi.Naming;
 import java.rmi.RemoteException;
 
+import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.io.File;
 import java.io.FileInputStream;
@@ -452,6 +453,23 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
       } else {
         throw new IllegalArgumentException("Argument inconnu ou incomplet: " + args[i]);
       }
+    }
+  }
+
+  public synchronized void jvnFlush(int joi, JvnRemoteServer js, Serializable state) throws RemoteException, JvnException {
+    // Si le serveur était le rédacteur
+    JvnRemoteServer currentWriter = writersMap.get(joi);
+    if (currentWriter != null && currentWriter.equals(js)) {
+      if (state != null) {
+        objectStates.put(joi, state);
+      }
+      writersMap.remove(joi);
+    }
+
+    // Si le serveur était dans les lecteurs
+    HashSet<JvnRemoteServer> readers = readersMap.get(joi);
+    if (readers != null) {
+      readers.remove(js);
     }
   }
 }

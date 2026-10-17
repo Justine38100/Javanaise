@@ -29,7 +29,6 @@ public interface JvnRemoteCoord extends Remote {
 	* Associate a symbolic name with a JVN object
 	* @param jon : the JVN object name
 	* @param jo  : the JVN object 
-	* @param joi : the JVN object identification
 	* @param js  : the remote reference of the JVNServer
 	* @throws java.rmi.RemoteException,JvnException
 	**/
@@ -96,6 +95,15 @@ public interface JvnRemoteCoord extends Remote {
 	public void jvnTerminate(JvnRemoteServer js)
 		throws java.rmi.RemoteException, JvnException;
 
+	/**
+	 * Flush a JVN object managed by a given JVN server (release cached lock and update state if needed)
+	 * @param joi : the JVN object identification
+	 * @param js  : the remote reference of the server
+	 * @param state : current state to update on coordinator if writer, or null
+	 * @throws java.rmi.RemoteException, JvnException
+	 **/
+	public void jvnFlush(int joi, JvnRemoteServer js, Serializable state)
+			throws java.rmi.RemoteException, JvnException;
  }
 
 

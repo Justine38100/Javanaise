@@ -65,5 +65,18 @@ public interface JvnObject extends Serializable {
 	* @return the current JVN object state
 	* @throws JvnException
 	**/
-   public Serializable jvnInvalidateWriterForReader() throws jvn.core.JvnException;	
+   public Serializable jvnInvalidateWriterForReader() throws jvn.core.JvnException;
+
+	/**
+	 * Flush the cached lock and state of the JVN object
+	 * @throws JvnException
+	 **/
+	public void jvnFlush() throws jvn.core.JvnException;
+	
+	/**
+	 * Check if an active lock is held on the JVN object
+	 * @return true if a lock is held, false otherwise
+	 * @throws JvnException
+	 */
+	public boolean isLockHeld() throws jvn.core.JvnException;
 }
