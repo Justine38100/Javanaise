@@ -11,7 +11,7 @@ package jvn.core;
 import java.rmi.server.UnicastRemoteObject;
 import java.rmi.RemoteException;
 import java.util.Map;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.io.*;
 
 
@@ -25,7 +25,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	}
 
 	// A JVN server is managed as a singleton 
-	private static JvnServerImpl js = null;
+	private static volatile JvnServerImpl js = null;
 
 	// Référence vers le coordinateur global.
 	private JvnRemoteCoord jvnCoord;
@@ -33,7 +33,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	// Dictionnaire pour stocker les objets JVN avec leur identifiant comme clé.
 	// Exemple : id = 1, JvnObject = "Hello World" (De type Sentence)
 	// C'est le cache local des objets connus par le serveur.
-	private Map<Integer, JvnObject> jvnObjectsMap;
+	private final Map<Integer, JvnObject> jvnObjectsMap;
 
 	/**
 	 * Default constructor
@@ -42,7 +42,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	private JvnServerImpl() throws Exception {
 		super();
 		this.jvnCoord = lookupCoordinator();
-		this.jvnObjectsMap = new HashMap<Integer, JvnObject>();
+		this.jvnObjectsMap = new ConcurrentHashMap<Integer, JvnObject>();
 		JvnEventBus.publish("serveur local connecté au coordinateur " + JvnRmiConfig.coordinatorUrl());
 	}
 	
@@ -51,7 +51,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	* a JVN server instance
 	* @throws JvnException
 	**/
-	public static JvnServerImpl jvnGetServer() {
+	public static synchronized JvnServerImpl jvnGetServer() {
 		if (js == null){
 			try {
 				js = new JvnServerImpl();
@@ -75,7 +75,11 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 
 		// Nettoyage des ressources locales
 		jvnObjectsMap.clear();
-		js = null;
+		synchronized (JvnServerImpl.class) {
+			if (js == this) {
+				js = null;
+			}
+		}
 	}
 
 	/**
@@ -92,7 +96,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			JvnObject newobject = new JvnObjectImpl(newId, o, this, true);
 			
 			// Ajout de l'objet JVN à la map locale
-			jvnObjectsMap.put(newId, newobject);
+			jvnObjectsMap.putIfAbsent(newId, newobject);
 
 			return newobject;
 
@@ -135,9 +139,8 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			// Cet objet JVN reçu par lookup doit maintenant utiliser ce JvnServerImpl local.
 			lookedUpObject.setJvnServer(this);
 
-			jvnObjectsMap.put(lookedUpObject.jvnGetObjectId(), lookedUpObject);
-
-			return lookedUpObject;
+			JvnObject existingObject = jvnObjectsMap.putIfAbsent(lookedUpObject.jvnGetObjectId(), lookedUpObject);
+			return existingObject == null ? lookedUpObject : existingObject;
 
 		} catch (Exception e) {
 			throw new jvn.core.JvnException("Erreur lors de la recherche de l'objet JVN", e);

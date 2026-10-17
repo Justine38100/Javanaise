@@ -32,7 +32,10 @@ public class E2ELoadVerifierClient {
         // On utilise un Set pour verifier la presence de chaque message attendu.
         int expectedTotal = iterations * 2;
         if (messages.size() != expectedTotal) {
-            throw new AssertionError("nombre de messages attendu=" + expectedTotal + ", obtenu=" + messages.size());
+            long messagesA = messages.stream().filter(message -> message.startsWith("A-")).count();
+            long messagesB = messages.stream().filter(message -> message.startsWith("B-")).count();
+            throw new AssertionError("nombre de messages attendu=" + expectedTotal + ", obtenu=" + messages.size()
+                    + " (A=" + messagesA + ", B=" + messagesB + ")");
         }
 
         for (int i = 0; i < iterations; i++) {

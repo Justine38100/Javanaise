@@ -19,7 +19,7 @@ public class JvnProxy implements InvocationHandler {
     // auprès du coordinateur après chaque méthode annotée @JvnWrite.
     private JvnServerImpl jvnServer;
 
-    private JvnProxy(JvnObject jvnObject, JvnServerImpl jvnServer) {
+    JvnProxy(JvnObject jvnObject, JvnServerImpl jvnServer) {
         this.jvnObject = jvnObject;
         this.jvnServer = jvnServer;
     }
@@ -85,18 +85,18 @@ public class JvnProxy implements InvocationHandler {
         boolean lockTaken = false;
         boolean writeLockTaken = false;
 
-        if (method.isAnnotationPresent(JvnRead.class)) {
-            jvnObject.jvnLockRead();
-            lockTaken = true;
-        } else if (method.isAnnotationPresent(JvnWrite.class)) {
-            jvnObject.jvnLockWrite();
-            lockTaken = true;
-            writeLockTaken = true;
-        } else {
-            throw new IllegalStateException("La méthode " + method.getName() + " doit être annotée avec @JvnRead ou @JvnWrite.");
-        }
-
         try {
+            if (method.isAnnotationPresent(JvnRead.class)) {
+                jvnObject.jvnLockRead();
+                lockTaken = true;
+            } else if (method.isAnnotationPresent(JvnWrite.class)) {
+                jvnObject.jvnLockWrite();
+                lockTaken = true;
+                writeLockTaken = true;
+            } else {
+                throw new IllegalStateException("La méthode " + method.getName() + " doit être annotée avec @JvnRead ou @JvnWrite.");
+            }
+
             Object result = method.invoke(jvnObject.jvnGetObjectState(), args);
 
             if (writeLockTaken) {

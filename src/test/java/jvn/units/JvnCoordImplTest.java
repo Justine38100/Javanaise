@@ -3,12 +3,18 @@ package jvn.units;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.nio.file.Path;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -205,6 +211,45 @@ class JvnCoordImplTest {
     }
 
     /*
+     * Scénario : le coordinateur attend qu'un writer termine son accès avant de lui
+     * invalider le verrou. Pendant cette attente, le writer proxy sauvegarde son dernier état.
+     * Résultat attendu : la sauvegarde ne se bloque pas derrière le callback RMI et le prochain
+     * writer reçoit l'état le plus récent.
+     */
+    @Test
+    void writerCanSaveStateWhileCoordinatorWaitsForInvalidation() throws Exception {
+        JvnCoordImpl coord = JvnCoordImpl.getCoordInstance();
+        FakeServer writer = new FakeServer("initial-state");
+        writer.invalidationEntered = new CountDownLatch(1);
+        writer.allowInvalidationToFinish = new CountDownLatch(1);
+        FakeServer nextWriter = new FakeServer("unused");
+        int id = coord.jvnGetObjectId();
+        coord.jvnRegisterObject("TEST_CONCURRENT_UPDATE_" + id,
+                new JvnObjectImpl(id, "initial-state", null, true), writer);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Serializable> lockRequest = executor.submit(() -> coord.jvnLockWrite(id, nextWriter));
+            assertTrue(writer.invalidationEntered.await(2, TimeUnit.SECONDS),
+                    "le coordinateur doit être entré dans le callback d'invalidation");
+
+            Future<?> update = executor.submit(() -> {
+                coord.jvnUpdateObjectState(id, "latest-state", writer);
+                return null;
+            });
+            update.get(2, TimeUnit.SECONDS);
+
+            writer.state = "latest-state";
+            writer.allowInvalidationToFinish.countDown();
+            assertEquals("latest-state", lockRequest.get(2, TimeUnit.SECONDS),
+                    "le nouveau writer doit recevoir le dernier état sauvegardé");
+        } finally {
+            writer.allowInvalidationToFinish.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    /*
      * Scénario : le coordinateur sauvegarde son état durable sur disque,
      * puis on simule un redémarrage en supprimant l'instance singleton en mémoire.
      * Le nouveau coordinateur doit recharger le nom de l'objet, son dernier état connu
@@ -265,6 +310,8 @@ class JvnCoordImplTest {
         private boolean failOnInvalidateReader;
         private boolean failOnInvalidateWriter;
         private boolean failOnInvalidateWriterForReader;
+        private CountDownLatch invalidationEntered;
+        private CountDownLatch allowInvalidationToFinish;
 
         FakeServer(Serializable state) throws RemoteException {
             super();
@@ -283,6 +330,7 @@ class JvnCoordImplTest {
             if (failOnInvalidateWriter) {
                 throw new RemoteException("client writer unreachable");
             }
+            awaitInvalidationIfRequested();
             return state;
         }
 
@@ -292,6 +340,21 @@ class JvnCoordImplTest {
                 throw new RemoteException("client writer unreachable");
             }
             return state;
+        }
+
+        private void awaitInvalidationIfRequested() throws RemoteException {
+            if (invalidationEntered == null || allowInvalidationToFinish == null) {
+                return;
+            }
+            invalidationEntered.countDown();
+            try {
+                if (!allowInvalidationToFinish.await(3, TimeUnit.SECONDS)) {
+                    throw new RemoteException("test timeout while awaiting invalidation release");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RemoteException("invalidation interrupted", e);
+            }
         }
     }
 }

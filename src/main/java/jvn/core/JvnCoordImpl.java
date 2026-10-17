@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord {
@@ -39,7 +40,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   private static JvnCoordImpl coordInstance = null;
 
   // Compteur pour donner les identifiants uniques aux objets JVN
-  private int nextObjectId = 0;
+  private volatile int nextObjectId = 0;
 
   // Dictionnaire pour stocker les noms des objets JVN avec leur identifiant comme clé.
   private Map<String, Integer> nameToIdMap;
@@ -52,6 +53,9 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 
   // Pour chaque objet, on veut stocker la liste des serveurs qui ont un verrou d'écriture sur cet objet.
   private Map<Integer, JvnRemoteServer> writersMap;
+
+  // Protège les écritures de snapshot sans bloquer les mises à jour d'état pendant un callback RMI.
+  private final Object snapshotLock = new Object();
 
   /**
   * Default constructor
@@ -98,7 +102,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   * @param js  : the remote reference of the JVNServer
   * @throws java.rmi.RemoteException,JvnException
   **/
-  public void jvnRegisterObject(String jon, JvnObject jo, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.core.JvnException{
+  public synchronized void jvnRegisterObject(String jon, JvnObject jo, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.core.JvnException{
     int objectId = jo.jvnGetObjectId();
     nameToIdMap.put(jon, objectId);
     objectStates.put(objectId, jo.jvnGetObjectState());
@@ -119,7 +123,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
   * @param js : the remote reference of the JVNServer
   * @throws java.rmi.RemoteException,JvnException
   **/
-  public JvnObject jvnLookupObject(String jon, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.core.JvnException{
+  public synchronized JvnObject jvnLookupObject(String jon, JvnRemoteServer js) throws java.rmi.RemoteException,jvn.core.JvnException{
     Integer objectId = nameToIdMap.get(jon);
 
     if (objectId == null) {
@@ -239,7 +243,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
    * @throws RemoteException si l'appel RMI échoue
    * @throws JvnException si le serveur appelant n'est pas le writer courant
    */
-  public synchronized void jvnUpdateObjectState(int joi, Serializable state, JvnRemoteServer js) throws RemoteException, JvnException {
+  public void jvnUpdateObjectState(int joi, Serializable state, JvnRemoteServer js) throws RemoteException, JvnException {
     // Seul le serveur qui possède actuellement le verrou d'écriture a le droit
     // de sauvegarder l'état. Cela évite qu'un ancien client écrase l'objet avec
     // une version périmée après avoir perdu son verrou.
@@ -262,7 +266,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
 	* @param js  : the remote reference of the server
 	* @throws java.rmi.RemoteException, JvnException
 	**/
-  public void jvnTerminate(JvnRemoteServer js) throws java.rmi.RemoteException, JvnException {
+  public synchronized void jvnTerminate(JvnRemoteServer js) throws java.rmi.RemoteException, JvnException {
     removeDeadServer(js);
   }
 
@@ -287,10 +291,10 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
    */
   private void initializeEmptyState() {
     nextObjectId = 0;
-    this.nameToIdMap = new HashMap<String, Integer>();
-    this.objectStates = new HashMap<Integer, Serializable>();
+    this.nameToIdMap = new ConcurrentHashMap<String, Integer>();
+    this.objectStates = new ConcurrentHashMap<Integer, Serializable>();
     this.readersMap = new HashMap<Integer, HashSet<JvnRemoteServer>>();
-    this.writersMap = new HashMap<Integer, JvnRemoteServer>();
+    this.writersMap = new ConcurrentHashMap<Integer, JvnRemoteServer>();
   }
 
   /**
@@ -320,8 +324,8 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
     try (ObjectInputStream input = new ObjectInputStream(new FileInputStream(snapshotFile))) {
       CoordinatorSnapshot snapshot = (CoordinatorSnapshot) input.readObject();
       this.nextObjectId = snapshot.nextObjectId;
-      this.nameToIdMap = snapshot.nameToIdMap;
-      this.objectStates = snapshot.objectStates;
+      this.nameToIdMap = new ConcurrentHashMap<String, Integer>(snapshot.nameToIdMap);
+      this.objectStates = new ConcurrentHashMap<Integer, Serializable>(snapshot.objectStates);
       rebuildLockMapsAfterRecovery();
       JvnEventBus.publish("coordinateur redémarré avec le fichier de snapshot " + snapshotFile.getPath());
     } catch (Exception e) {
@@ -342,42 +346,33 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
    * @throws JvnException si la sauvegarde disque échoue
    */
   private void saveSnapshot() throws JvnException {
+    synchronized (snapshotLock) {
+      // On récupère le fichier de snapshot.
+      File snapshotFile = getSnapshotFile();
 
-    // On récupère le fichier de snapshot.
-    File snapshotFile = getSnapshotFile();
-
-    // On s'assure que le répertoire parent (du fichier de snapshot) existe, sinon on le crée.
-    File parent = snapshotFile.getParentFile();
-
-    // On crée le répertoire parent si nécessaire. Si la création échoue, on lève une exception.
-    if (parent != null && !parent.exists() && !parent.mkdirs()) {
-      throw new JvnException("Impossible de créer le répertoire du snapshot du coordinateur", null);
-    }
-
-    // On écrit d'abord dans un fichier temporaire pour éviter de corrompre le snapshot existant.
-    File temporaryFile = new File(snapshotFile.getPath() + ".tmp");
-
-    // On crée un objet snapshot qui contient les données à sauvegarder.
-    CoordinatorSnapshot snapshot = new CoordinatorSnapshot(nextObjectId, nameToIdMap, objectStates);
-
-    // On écrit le snapshot dans le fichier temporaire. Si l'écriture échoue, on lève une exception.
-    try (ObjectOutputStream output = new ObjectOutputStream(new FileOutputStream(temporaryFile))) {
-      output.writeObject(snapshot);
-    } catch (Exception e) {
-      throw new JvnException("Impossible de sauvegarder le snapshot du coordinateur", e);
-    }
-
-    // On remplace le fichier de snapshot existant par le fichier temporaire.
-    if (!temporaryFile.renameTo(snapshotFile)) {
-
-      // Si le fichier de snapshot existant existe déjà, on essaie de le supprimer avant de renommer.
-      if (snapshotFile.exists() && !snapshotFile.delete()) {
-        throw new JvnException("Impossible de remplacer l'ancien snapshot du coordinateur", null);
+      // On s'assure que le répertoire parent existe, sinon on le crée.
+      File parent = snapshotFile.getParentFile();
+      if (parent != null && !parent.exists() && !parent.mkdirs()) {
+        throw new JvnException("Impossible de créer le répertoire du snapshot du coordinateur", null);
       }
 
-      // On essaie à nouveau de renommer le fichier temporaire en fichier de snapshot.
+      // On écrit d'abord dans un fichier temporaire pour préserver le snapshot précédent.
+      File temporaryFile = new File(snapshotFile.getPath() + ".tmp");
+      CoordinatorSnapshot snapshot = new CoordinatorSnapshot(nextObjectId, nameToIdMap, objectStates);
+
+      try (ObjectOutputStream output = new ObjectOutputStream(new FileOutputStream(temporaryFile))) {
+        output.writeObject(snapshot);
+      } catch (Exception e) {
+        throw new JvnException("Impossible de sauvegarder le snapshot du coordinateur", e);
+      }
+
       if (!temporaryFile.renameTo(snapshotFile)) {
-        throw new JvnException("Impossible de finaliser le snapshot du coordinateur", null);
+        if (snapshotFile.exists() && !snapshotFile.delete()) {
+          throw new JvnException("Impossible de remplacer l'ancien snapshot du coordinateur", null);
+        }
+        if (!temporaryFile.renameTo(snapshotFile)) {
+          throw new JvnException("Impossible de finaliser le snapshot du coordinateur", null);
+        }
       }
     }
   }
@@ -396,7 +391,7 @@ public class JvnCoordImpl extends UnicastRemoteObject implements JvnRemoteCoord 
    */
   private void rebuildLockMapsAfterRecovery() {
     this.readersMap = new HashMap<Integer, HashSet<JvnRemoteServer>>();
-    this.writersMap = new HashMap<Integer, JvnRemoteServer>();
+    this.writersMap = new ConcurrentHashMap<Integer, JvnRemoteServer>();
 
     // Pour chaque objet connu, on initialise une liste de lecteurs vide et aucun écrivain.
     for (Integer objectId : objectStates.keySet()) {

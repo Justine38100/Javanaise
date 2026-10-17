@@ -1,10 +1,13 @@
 package jvn.core;
 import java.io.Serializable;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class JvnObjectImpl implements JvnObject {
 
     // Identifiant de l'objet partagé
-    private int objectId;
+    private final int objectId;
 
     // État de l'objet partagé dans la mémoire
     private Serializable objectState;
@@ -21,6 +24,18 @@ public class JvnObjectImpl implements JvnObject {
 
     private LockState lockState;
 
+    private enum LockRequest {
+        READ,
+        WRITE
+    }
+
+    // Une seule acquisition réseau à la fois pour cet objet local.
+    private LockRequest lockRequestInProgress;
+
+    // Sérialise les sections critiques locales entre jvnLock... et jvnUnLock.
+    private transient ReentrantLock invocationLock;
+    private transient ThreadLocal<Boolean> invocationHeldByThread;
+
     // Référence vers le serveur local JvnServerImpl
     private transient JvnServerImpl jvnServer;
 
@@ -29,59 +44,143 @@ public class JvnObjectImpl implements JvnObject {
         this.objectState = objectState;
         this.jvnServer = jvnServer;
         this.lockState = createdLocally ? LockState.W : LockState.NL;
+        initializeThreadCoordination();
     }
 
     @Override
-    public synchronized void jvnLockRead() throws JvnException {
-        switch(lockState) {
-            case NL:
-                // On prend le verrou de lecture auprès du serveur
-                this.objectState = jvnServer.jvnLockRead(objectId);
-                // Une fois qu'on a le verrou, on dit qu'on le possède.
-                lockState = LockState.R;
-                break;
+    public void jvnLockRead() throws JvnException {
+        acquireInvocationScope();
+        try {
+            synchronized (this) {
+                awaitLockRequest();
+                switch (lockState) {
+                    case NL:
+                        lockRequestInProgress = LockRequest.READ;
+                        break;
+                    case RC:
+                        lockState = LockState.R;
+                        return;
+                    case WC:
+                        lockState = LockState.RWC;
+                        return;
+                    case R:
+                    case W:
+                    case RWC:
+                        return;
+                }
+            }
 
-            case RC:
-                lockState = LockState.R;
-                break;
-
-            case WC:
-                lockState = LockState.RWC;
-                break;
-
-            case R:
-            case W:
-            case RWC:
-                // On a déjà un verrou qui permet de lire.
-                break;
+            requestReadLockFromCoordinator();
+        } catch (JvnException e) {
+            releaseInvocationScope();
+            throw e;
+        } catch (RuntimeException e) {
+            finishFailedLockRequest();
+            releaseInvocationScope();
+            throw e;
         }
     }
 
     @Override
-    public synchronized void jvnLockWrite() throws JvnException {
-        switch(lockState) {
-            case NL:
-            case RC:
-            case R:
-                // Pour nous, on doit forcément passer de R à RC avant de pouvoir passer à W.
-                // On prend le verrou d'écriture auprès du serveur
-                this.objectState = jvnServer.jvnLockWrite(objectId);
-                lockState = LockState.W;
-                break;
+    public void jvnLockWrite() throws JvnException {
+        acquireInvocationScope();
+        try {
+            synchronized (this) {
+                awaitLockRequest();
+                switch (lockState) {
+                    case NL:
+                    case RC:
+                    case R:
+                        lockRequestInProgress = LockRequest.WRITE;
+                        break;
+                    case WC:
+                    case RWC:
+                        lockState = LockState.W;
+                        return;
+                    case W:
+                        return;
+                }
+            }
 
-            case WC:
-            case RWC:
-                lockState = LockState.W;
-                break;
+            requestWriteLockFromCoordinator();
+        } catch (JvnException e) {
+            releaseInvocationScope();
+            throw e;
+        } catch (RuntimeException e) {
+            finishFailedLockRequest();
+            releaseInvocationScope();
+            throw e;
+        }
+    }
 
-            case W:
-                // On a déjà un verrou qui permet d'écrire.
-                break;
+    private void requestReadLockFromCoordinator() throws JvnException {
+        try {
+            Serializable freshState = jvnServer.jvnLockRead(objectId);
+            synchronized (this) {
+                objectState = freshState;
+                lockState = LockState.R;
+                lockRequestInProgress = null;
+                notifyAll();
+            }
+        } catch (JvnException e) {
+            finishFailedLockRequest();
+            throw e;
+        }
+    }
+
+    private void requestWriteLockFromCoordinator() throws JvnException {
+        try {
+            Serializable freshState = jvnServer.jvnLockWrite(objectId);
+            synchronized (this) {
+                objectState = freshState;
+                lockState = LockState.W;
+                lockRequestInProgress = null;
+                notifyAll();
+            }
+        } catch (JvnException e) {
+            finishFailedLockRequest();
+            throw e;
+        }
+    }
+
+    private void finishFailedLockRequest() {
+        synchronized (this) {
+            lockRequestInProgress = null;
+            notifyAll();
+        }
+    }
+
+    private void awaitLockRequest() throws JvnException {
+        while (lockRequestInProgress != null) {
+            try {
+                wait();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new JvnException("Interrupted while waiting for a lock request", e);
+            }
+        }
+    }
+
+    private void acquireInvocationScope() {
+        if (!invocationHeldByThread.get()) {
+            invocationLock.lock();
+            invocationHeldByThread.set(true);
+        }
+    }
+
+    private void releaseInvocationScope() {
+        if (invocationHeldByThread.get()) {
+            invocationHeldByThread.set(false);
+            invocationLock.unlock();
         }
     }
 
     @Override
     public synchronized void jvnUnLock() throws JvnException {
+        if (!invocationHeldByThread.get() && invocationLock.isLocked()) {
+            throw new JvnException("The current thread does not own the local object lock", null);
+        }
+
         switch(lockState) {
             case R:
                 // On lâche le verrou de lecture.
@@ -108,6 +207,7 @@ public class JvnObjectImpl implements JvnObject {
                 break;
         }
         notifyAll(); // On veut réveiller les threads RMI qui attendent de rétrograder les droits.
+        releaseInvocationScope();
     }
 
     @Override
@@ -116,13 +216,19 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     @Override
-    public Serializable jvnGetObjectState() throws JvnException {
+    public synchronized Serializable jvnGetObjectState() throws JvnException {
         return objectState;
     }
 
     @Override
     public synchronized void jvnInvalidateReader() throws JvnException {
         try {
+            // Une demande READ déjà acceptée doit d'abord appliquer sa réponse locale.
+            // Pour WRITE, le callback peut être provoqué par cette demande elle-même :
+            // on invalide alors la lecture pour permettre au coordinateur d'accorder l'écriture.
+            while (lockRequestInProgress == LockRequest.READ) {
+                wait();
+            }
             while (lockState == LockState.R) {
                 wait(); // On attend que le verrou de lecture soit libéré
             }
@@ -139,7 +245,7 @@ public class JvnObjectImpl implements JvnObject {
     @Override
     public synchronized Serializable jvnInvalidateWriter() throws JvnException {
         try {
-            while (lockState == LockState.W || lockState == LockState.RWC) {
+            while (lockRequestInProgress != null || lockState == LockState.W || lockState == LockState.RWC) {
                 wait(); // On attend que le verrou d'écriture soit libéré
             }
             if (lockState == LockState.WC ) {
@@ -157,7 +263,7 @@ public class JvnObjectImpl implements JvnObject {
     @Override
     public synchronized Serializable jvnInvalidateWriterForReader() throws JvnException {
         try {
-            while (lockState == LockState.W) {
+            while (lockRequestInProgress != null || lockState == LockState.W) {
                 wait(); // On attend que le verrou d'écriture soit libéré
             }
             if (lockState == LockState.WC) {
@@ -178,6 +284,16 @@ public class JvnObjectImpl implements JvnObject {
 
     public void setJvnServer(JvnServerImpl jvnServer) {
         this.jvnServer = jvnServer;
+    }
+
+    private void readObject(ObjectInputStream input) throws IOException, ClassNotFoundException {
+        input.defaultReadObject();
+        initializeThreadCoordination();
+    }
+
+    private void initializeThreadCoordination() {
+        invocationLock = new ReentrantLock(true);
+        invocationHeldByThread = ThreadLocal.withInitial(() -> Boolean.FALSE);
     }
 
     /**
