@@ -22,6 +22,8 @@ public class JvnObjectImpl implements JvnObject {
         RWC // Write lock cached and read taken
     }
 
+    // état javanaise de l'objet local
+    // Donne l'info des droits accordés au client.
     private LockState lockState;
 
     private enum LockRequest {
@@ -30,10 +32,20 @@ public class JvnObjectImpl implements JvnObject {
     }
 
     // Une seule acquisition réseau à la fois pour cet objet local.
+    // état possible : null, soit READ, soit WRITE. 
+    // Il indique qu’une demande de verrouillage est en cours vers le coordinateur.
+    // Nécessaire pour les callback RMI du coordinateur.
     private LockRequest lockRequestInProgress;
 
     // Sérialise les sections critiques locales entre jvnLock... et jvnUnLock.
+
+    // Chaque objet local possède sont propre invocationLock
+    // Les méthodes jvnLockRead() et jvnLockWrite() le prennent au début de l’accès. 
+    // Il reste pris pendant que le thread utilise l’objet et jvnUnLock() le libère.
     private transient ReentrantLock invocationLock;
+
+    // Indicateur séparé pour chaque thread. Il mémorise si le thread courant a pris invocationLock.
+    // Utilisé pour éviter qu’un thread libère le verrou d’un autre thread et pour gérer les appels réentrants du même thread.
     private transient ThreadLocal<Boolean> invocationHeldByThread;
 
     // Référence vers le serveur local JvnServerImpl
@@ -49,33 +61,60 @@ public class JvnObjectImpl implements JvnObject {
 
     @Override
     public void jvnLockRead() throws JvnException {
+        // On essaie d'acquérir le verrou d'invocation pour le thread courant. 
+        // Si le thread a déjà acquis ce verrou, cette méthode ne fait rien.
+        // Si un autre thread a déjà acquis le verrou, le thread courant attend que le verrou soit libéré.
         acquireInvocationScope();
+
         try {
+            // Cette synchronisation est nécessaire pour les modifications internes
+            // qui surviennent dans les callbacks RMI du coordinateur (ex : jvnInvalidateReader(), jvnInvalidateWriter(), jvnInvalidateWriterForReader()).
+            // ou pour les autres threads qui appellent jvnLockRead() ou jvnLockWrite() sur le même objet local.
             synchronized (this) {
+
+                // On regarde si un thread est déjà en train de demander un verrou au coordinateur. 
+                // Si c'est le cas, on attend que cette demande se termine avant de continuer.
                 awaitLockRequest();
+
                 switch (lockState) {
                     case NL:
                         lockRequestInProgress = LockRequest.READ;
+                        // On doit passer par le coordinateur pour obtenir le verrou de lecture.
+                        // On ne veut pas retourner avant d'avoir obtenu le verrou de lecture.
                         break;
                     case RC:
                         lockState = LockState.R;
+                        // Pas besoin de passer par le coordinateur, on peut directement lire.
+                        // => on retourne sans faire de requête réseau.
                         return;
                     case WC:
                         lockState = LockState.RWC;
+                        // Pas besoin de passer par le coordinateur, on peut directement lire.
+                        // => on retourne sans faire de requête réseau.
                         return;
                     case R:
                     case W:
                     case RWC:
+                        // Pas besoin de passer par le coordinateur, on peut directement lire.
+                        // => on retourne sans faire de requête réseau.
                         return;
                 }
             }
-
+            // Pour faire l'appel réseau, on sort du synchronized(this) pour ne pas bloquer les autres threads qui veulent accéder à l'objet local.
             requestReadLockFromCoordinator();
+
         } catch (JvnException e) {
+            // Si la demande de verrouillage échoue, on réinitialise lockRequestInProgress à null et on notifie les threads en attente.
             releaseInvocationScope();
+
             throw e;
         } catch (RuntimeException e) {
+            // Si la demande de verrouillage échoue, on réinitialise lockRequestInProgress à null et on notifie les threads en attente.
+            // On besoin de faire finishFailedLockRequest() ici car requestWriteLockFromCoordinator() ne l'a pas fait.
+            // Car l'exception est levée avant l'appel à requestWriteLockFromCoordinator().
             finishFailedLockRequest();
+
+            // On libère le verrou d'invocation pour le thread courant.
             releaseInvocationScope();
             throw e;
         }
@@ -83,10 +122,20 @@ public class JvnObjectImpl implements JvnObject {
 
     @Override
     public void jvnLockWrite() throws JvnException {
+        // Idem que pour jvnLockRead() : on essaie d'acquérir le verrou d'invocation pour le thread courant.
         acquireInvocationScope();
+
         try {
+
+            // Cette synchronisation est nécessaire pour les modifications internes
+            // qui surviennent dans les callbacks RMI du coordinateur (ex : jvnInvalidateReader(), jvnInvalidateWriter(), jvnInvalidateWriterForReader()).
+            // ou pour les autres threads qui appellent jvnLockRead() ou jvnLockWrite() sur le même objet local.
             synchronized (this) {
+
+                // On regarde si un thread est déjà en train de demander un verrou au coordinateur. 
+                // Si c'est le cas, on attend que cette demande se termine avant de continuer.
                 awaitLockRequest();
+
                 switch (lockState) {
                     case NL:
                     case RC:
@@ -101,43 +150,81 @@ public class JvnObjectImpl implements JvnObject {
                         return;
                 }
             }
-
+            // Pour faire l'appel réseau, on sort du synchronized(this) pour ne pas bloquer les autres threads qui veulent accéder à l'objet local.
             requestWriteLockFromCoordinator();
+
         } catch (JvnException e) {
+            // Si la demande de verrouillage échoue, on réinitialise lockRequestInProgress à null et on notifie les threads en attente.
             releaseInvocationScope();
+            // On ne fait pas de finishFailedLockRequest() ici car requestWriteLockFromCoordinator() le fait déjà en cas d'échec.
             throw e;
+
         } catch (RuntimeException e) {
+            // Si la demande de verrouillage échoue, on réinitialise lockRequestInProgress à null et on notifie les threads en attente.
+            // On besoin de faire finishFailedLockRequest() ici car requestWriteLockFromCoordinator() ne l'a pas fait.
+            // Car l'exception est levée avant l'appel à requestWriteLockFromCoordinator().
             finishFailedLockRequest();
+
+            // On libère le verrou d'invocation pour le thread courant.
             releaseInvocationScope();
+
             throw e;
         }
     }
 
+    /**
+     * Demande un verrou de lecture au coordinateur et met à jour l'état local de l'objet.
+     * Logique de la méthode :
+     * 1. Appelle jvnLockRead() sur le serveur local pour obtenir un verrou de lecture du coordinateur.
+     * 2. Met à jour l'état local de l'objet avec l'état renvoyé par le coordinateur.
+     * 3. Met à jour l'état du verrou local à R (lecture).
+     * 4. Réinitialise lockRequestInProgress à null et notifie tous les threads en attente.
+     * @throws JvnException
+     */
     private void requestReadLockFromCoordinator() throws JvnException {
         try {
+            // On demande un verrou de lecture au coordinateur.
             Serializable freshState = jvnServer.jvnLockRead(objectId);
+
+            // On reprend la synchronisation pour protéger l'accès à l'état local de l'objet et à lockRequestInProgress.
             synchronized (this) {
                 objectState = freshState;
                 lockState = LockState.R;
                 lockRequestInProgress = null;
+                // On notifie les threads qui attendent que lockRequestInProgress soit null pour continuer.
                 notifyAll();
             }
         } catch (JvnException e) {
+            // Si la demande de verrouillage échoue, on réinitialise lockRequestInProgress à null et on notifie les threads en attente.
             finishFailedLockRequest();
             throw e;
         }
     }
 
+    /**
+     * Demande un verrou d'écriture au coordinateur et met à jour l'état local de l'objet.
+     * Logique de la méthode :
+     * 1. Appelle jvnLockWrite() sur le serveur local pour obtenir un verrou d'écriture du coordinateur.
+     * 2. Met à jour l'état local de l'objet avec l'état renvoyé par le coordinateur.
+     * 3. Met à jour l'état du verrou local à W (écriture).
+     * 4. Réinitialise lockRequestInProgress à null et notifie tous les threads en attente.
+     * @throws JvnException
+     */
     private void requestWriteLockFromCoordinator() throws JvnException {
         try {
+            // On demande un verrou d'écriture au coordinateur.
             Serializable freshState = jvnServer.jvnLockWrite(objectId);
+
+            // On reprend la synchronisation pour protéger l'accès à l'état local de l'objet et à lockRequestInProgress.
             synchronized (this) {
                 objectState = freshState;
                 lockState = LockState.W;
                 lockRequestInProgress = null;
+                // On notifie les threads qui attendent que lockRequestInProgress soit null pour continuer.
                 notifyAll();
             }
         } catch (JvnException e) {
+            // Si la demande de verrouillage échoue, on réinitialise lockRequestInProgress à null et on notifie les threads en attente.
             finishFailedLockRequest();
             throw e;
         }
@@ -150,6 +237,12 @@ public class JvnObjectImpl implements JvnObject {
         }
     }
 
+    /**
+     * Attend que lockRequestInProgress soit null, ce qui signifie qu'aucune demande de verrouillage n'est en cours.
+     * 
+     * Rappel : lockRequestInProgress est différent de null si un thread a demandé un verrou de lecture ou d'écriture au coordinateur et attend la réponse.
+     * @throws JvnException
+     */
     private void awaitLockRequest() throws JvnException {
         while (lockRequestInProgress != null) {
             try {
@@ -161,22 +254,36 @@ public class JvnObjectImpl implements JvnObject {
         }
     }
 
+    /**
+     * Acquiert le verrou d'invocation pour le thread courant si ce n'est pas déjà fait.
+     */
     private void acquireInvocationScope() {
+        // Si le thread courant n'a pas encore acquis le verrou d'invocation, on le prend.
         if (!invocationHeldByThread.get()) {
+            // On prend le verrou d'invocation pour le thread courant.
             invocationLock.lock();
+            // On marque que le thread courant a acquis le verrou d'invocation.
             invocationHeldByThread.set(true);
         }
     }
 
+    /**
+     * Libère le verrou d'invocation pour le thread courant si c'est lui qui l'a acquis. 
+     * Sinon, ne fait rien.
+     */
     private void releaseInvocationScope() {
+        // Si le thread courant a acquis le verrou d'invocation, on le libère.
         if (invocationHeldByThread.get()) {
+            // On libère le verrou d'invocation pour le thread courant.
             invocationHeldByThread.set(false);
+            // On libère le verrou d'invocation pour le thread courant.
             invocationLock.unlock();
         }
     }
 
     @Override
     public synchronized void jvnUnLock() throws JvnException {
+        // On vérifie que le thread courant a bien acquis le verrou d'invocation avant de libérer le verrou local.
         if (!invocationHeldByThread.get() && invocationLock.isLocked()) {
             throw new JvnException("The current thread does not own the local object lock", null);
         }
@@ -206,7 +313,10 @@ public class JvnObjectImpl implements JvnObject {
                 // On n'a pas de verrou à libérer.
                 break;
         }
-        notifyAll(); // On veut réveiller les threads RMI qui attendent de rétrograder les droits.
+        // On veut réveiller les threads qui attendent.
+        notifyAll();
+        
+        // On libère le verrou d'invocation pour le thread courant.
         releaseInvocationScope();
     }
 
@@ -245,9 +355,12 @@ public class JvnObjectImpl implements JvnObject {
     @Override
     public synchronized Serializable jvnInvalidateWriter() throws JvnException {
         try {
+            // Si un thread est en train de modifier l'état local, on attend.
+            // Si l'objet est en écriture ou lecture + écriture, on attend que le verrou soit libéré.
             while (lockRequestInProgress != null || lockState == LockState.W || lockState == LockState.RWC) {
                 wait(); // On attend que le verrou d'écriture soit libéré
             }
+            // Si l'objet est en écriture en cache, on le passe en NL.
             if (lockState == LockState.WC ) {
                 lockState = LockState.NL;
             }
@@ -286,11 +399,21 @@ public class JvnObjectImpl implements JvnObject {
         this.jvnServer = jvnServer;
     }
 
+    /**
+     * Méthode appelée lors de la désérialisation de l'objet local.
+     * Elle permet de réinitialiser les structures de coordination des threads qui ne sont pas sérialisables.
+     * @param input l'ObjectInputStream utilisé pour la désérialisation
+     * @throws IOException
+     * @throws ClassNotFoundException
+     */
     private void readObject(ObjectInputStream input) throws IOException, ClassNotFoundException {
         input.defaultReadObject();
         initializeThreadCoordination();
     }
 
+    /**
+     * Initialise les structures de coordination des threads pour cet objet local.
+     */
     private void initializeThreadCoordination() {
         invocationLock = new ReentrantLock(true);
         invocationHeldByThread = ThreadLocal.withInitial(() -> Boolean.FALSE);
