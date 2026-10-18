@@ -39,6 +39,9 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	// C'est le cache local des objets connus par le serveur.
 	private final Map<Integer, JvnObject> jvnObjectsMap;
 
+	// Les changements de cache sont sérialisés par cacheMutationLock.
+	private final Object cacheMutationLock = new Object();
+
 	/**
 	 * Default constructor
 	 * @throws JvnException
@@ -46,7 +49,6 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	private JvnServerImpl() throws Exception {
 		super();
         this.jvnCoord = lookupCoordinator();
-        this.jvnCoord = (JvnRemoteCoord) java.rmi.Naming.lookup("rmi://localhost/Coordinator");
 		this.jvnObjectsMap = new LinkedHashMap<Integer, JvnObject>(CACHE_CAPACITY, 0.75f, true);
         JvnEventBus.publish("serveur local connecté au coordinateur " + JvnRmiConfig.coordinatorUrl());
     }
@@ -78,8 +80,15 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			return null;
 		}, "Erreur lors de la terminaison du serveur JVN");
 
-		// Nettoyage des ressources locales
-		jvnObjectsMap.clear();
+		// Pour nettoyer le cache local, on synchronise sur cacheMutationLock pour éviter
+		// que d'autres threads ne modifient le cache pendant la suppression.
+		synchronized (cacheMutationLock) {
+
+			// On synchronise la LinkedHashMap.
+			synchronized (this) {
+				jvnObjectsMap.clear();
+			}
+		}
 		synchronized (JvnServerImpl.class) {
 			if (js == this) {
 				js = null;
@@ -100,10 +109,19 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			// Création d'un nouvel objet JVN avec l'état fourni et l'identifiant obtenu
 			JvnObject newobject = new JvnObjectImpl(newId, o, this, true);
 
-			// Ajout de l'objet JVN à la map locale : On vérifie la capacité et on insert de manière thread-safe
-			synchronized (this) {
+			// Sérialisation d'une action longue sur le cache.
+			// Ex : On ne veut pas créer deux fois le même objet (risque qu'il reste une place mais on ajoute deux objet => dépassement).
+			synchronized (cacheMutationLock) {
+
+				// Si le cache est plein, on effectue un flush pour libérer de l'espace
+				// Appel réseau !!
+				// On ne doit pas être sous this !
 				evictIfFull();
-				jvnObjectsMap.putIfAbsent(newId, newobject);
+
+				// Accès rapide à la LinkedHashMap pour vérifier si l'objet est déjà présent avant de l'ajouter.
+				synchronized (this) {
+					jvnObjectsMap.putIfAbsent(newId, newobject);
+				}
 			}
 
 			return newobject;
@@ -147,20 +165,31 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 
 			int objectId = lookedUpObject.jvnGetObjectId();
 
-			synchronized (this) {
-				// Si l'objet est déjà présent dans le cache local, on le retourne directement
-				if (jvnObjectsMap.containsKey(objectId)) {
-					return jvnObjectsMap.get(objectId);
+			// On veut regarder si l'objet est déjà présent dans le cache local ou non.
+			// Si non, on l'ajoute. 
+			synchronized (cacheMutationLock) {
+
+				synchronized (this) {
+					// Si l'objet est déjà présent dans le cache local, on le retourne directement
+					if (jvnObjectsMap.containsKey(objectId)) {
+						// L'objet est déjà présent dans le cache local, on le retourne directement.
+						// Get s'occupe de la positionner en queue de la LinkedHashMap pour le LRU.
+						return jvnObjectsMap.get(objectId);
+					}
 				}
 
+				// L'objet n'est pas présent dans le cache local, on doit l'ajouter
+				// Donc on regarde s'il reste de la place.
 				// Si le cache est plein, on effectue un flush pour libérer de l'espace
 				evictIfFull();
 
 				// Cet objet JVN reçu par lookup doit maintenant utiliser ce JvnServerImpl local.
 				lookedUpObject.setJvnServer(this);
                 
-                JvnObject existingObject = jvnObjectsMap.putIfAbsent(lookedUpObject.jvnGetObjectId(), lookedUpObject);
-                return existingObject == null ? lookedUpObject : existingObject;
+				synchronized (this) {
+					JvnObject existingObject = jvnObjectsMap.putIfAbsent(lookedUpObject.jvnGetObjectId(), lookedUpObject);
+					return existingObject == null ? lookedUpObject : existingObject;
+				}
             }
 			
 		} catch (JvnException je) {
@@ -219,6 +248,20 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
             jvnCoord.jvnUpdateObjectState(joi, state, this);
             return null;
         }, "Erreur lors de la mise à jour de l'état de l'objet JVN");
+    }
+
+    /**
+     * Relaye le flush d'un objet au coordinateur avec reconnexion en cas de panne RMI.
+	 * @param joi l'identifiant de l'objet JVN à flusher
+	 * @param state l'état courant de l'objet à flusher
+	 * @throws JvnException si le flush échoue définitivement
+     * @note : Il peut y avoir un appel réseau pour flusher un objet si le cache est plein !!!
+     */
+    public void jvnFlushObjectState(int joi, Serializable state) throws JvnException {
+        callCoordinator(() -> {
+            jvnCoord.jvnFlush(joi, this, state);
+            return null;
+        }, "Erreur lors du flush de l'objet JVN");
     }
 
     /**
@@ -300,7 +343,11 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
      * Réinitialise les verrous locaux de tous les objets JVN après la récupération du coordinateur.
      */
     private void resetLocalLocksAfterCoordinatorRecovery() {
-        for (JvnObject object : jvnObjectsMap.values()) {
+        JvnObject[] cachedObjects;
+        synchronized (this) {
+            cachedObjects = jvnObjectsMap.values().toArray(new JvnObject[0]);
+        }
+        for (JvnObject object : cachedObjects) {
             if (object instanceof JvnObjectImpl) {
                 ((JvnObjectImpl) object).jvnResetLockAfterCoordinatorRecovery();
             }
@@ -352,7 +399,7 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 				synchronized (this) {
 					jvnObject = jvnObjectsMap.get(joi);
 				}
-				
+
 				if (jvnObject != null) {
 					// Invalidation du verrou d'écriture pour l'objet JVN et récupération de son état actuel
 					return jvnObject.jvnInvalidateWriter();
@@ -387,22 +434,39 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 			}
 		};
 	
-	private synchronized void evictIfFull() throws JvnException {
-		if (jvnObjectsMap.size() >= CACHE_CAPACITY) {
-			Integer idToEvict = null;
-			for (Map.Entry<Integer, JvnObject> entry : jvnObjectsMap.entrySet()) {
+	/**
+	 * Cette méthode cherche le premier objet LRU qui n’a pas de verrou actif.
+	 * 
+	 * @note : Il peut y avoir un appel réseau pour flusher un objet si le cache est plein !!!
+	 * @throws JvnException
+	 */
+	private void evictIfFull() throws JvnException {
+		Integer idToEvict = null;
+
+		// On va regarder la LinkedHashMap pour trouver le premier objet qui n'a pas de verrou actif.
+		synchronized (this) {
+			// Si le cache est plein, on cherche un objet à flusher.
+			if (jvnObjectsMap.size() >= CACHE_CAPACITY) {
+				for (Map.Entry<Integer, JvnObject> entry : jvnObjectsMap.entrySet()) {
 				// L'objet doit pouvoir être libéré (ex. s'il est en RC, WC ou NL)
-				if (!(entry.getValue().isLockHeld())) {
-					idToEvict = entry.getKey();
-					break; // On prend le plus ancien candidat
+					if (!(entry.getValue().isLockHeld())) {
+						idToEvict = entry.getKey();
+						break; // On prend le plus ancien candidat
+					}
 				}
 			}
-			if (idToEvict != null) {
-				jvnFlush(idToEvict);
-			} else {
-				throw new JvnException("Cache capacity reached: all cached objects are currently locked", null);
-			}
 		}
+		// Si aucun objet n'est trouvable pour le flush, on ne peut pas libérer de place.
+		if (idToEvict == null) {
+			synchronized (this) {
+				if (jvnObjectsMap.size() >= CACHE_CAPACITY) {
+					throw new JvnException("Cache capacity reached: all cached objects are currently locked", null);
+				}
+			}
+			return;
+		}
+		// Appel réseau !!!
+		jvnFlush(idToEvict);
 	}
 
 	/**
@@ -411,17 +475,22 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 	 * @throws JvnException	
 	 **/
 	public void jvnFlush(int joi) throws JvnException {
-		JvnObject jo;
-		synchronized (this) {
-			jo = jvnObjectsMap.get(joi);
-		}
-		if (jo != null) {
-			// Demander à l'objet de libérer ses verrous et synchroniser son état
-			 jo.jvnFlush();
+		// Comme on fait une action longue sur le cache, on synchronise avec cacheMutationLock.
+		synchronized (cacheMutationLock) {
+			JvnObject jo;
+
 			
-			// Supprimer l'objet de la table locale
 			synchronized (this) {
-				jvnObjectsMap.remove(joi);
+				jo = jvnObjectsMap.get(joi);
+			}
+			if (jo != null) {
+				// Le flush de l'objet attend son tour d'utilisation avant de le retirer.
+				jo.jvnFlush();
+
+				// Supprimer l'objet de la table locale
+				synchronized (this) {
+					jvnObjectsMap.remove(joi);
+				}
 			}
 		}
 	}
@@ -445,8 +514,32 @@ public class JvnServerImpl extends UnicastRemoteObject implements JvnLocalServer
 		return jvnCoord;
 	}
 
-	public synchronized void touchObject(int joi) {
-		jvnObjectsMap.get(joi); // Marque l'objet comme accédé dans la LinkedHashMap pour le LRU
+	/**
+	 * Met à jour la position d'un objet dans l'ordre LRU du cache local.
+	 * Si l'objet n'est pas présent, il est ajouté au cache.
+	 * @param joi
+	 * @param object
+	 * @throws JvnException
+	 */
+	public void touchObject(int joi, JvnObject object) throws JvnException {
+		synchronized (cacheMutationLock) {
+			synchronized (this) {
+				// On cherche si l'objet est déjà présent dans le cache local. Si oui, on le rafraîchit.
+				if (jvnObjectsMap.containsKey(joi)) {
+					jvnObjectsMap.get(joi); // Rafraîchit sa position dans l'ordre LRU.
+					return;
+				}
+			}
+
+			// Un proxy peut conserver une référence après un flush explicite. On la
+			// réinscrit avant tout nouvel accès pour que les callbacks la retrouvent.
+			evictIfFull();
+			// Il y a eu un risque d'appel réseau !!
+
+			synchronized (this) {
+				jvnObjectsMap.putIfAbsent(joi, object);
+			}
+		}
 	}
 }
 

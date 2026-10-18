@@ -65,11 +65,11 @@ public class JvnObjectImpl implements JvnObject {
         // Si le thread a déjà acquis ce verrou, cette méthode ne fait rien.
         // Si un autre thread a déjà acquis le verrou, le thread courant attend que le verrou soit libéré.
         acquireInvocationScope();
-        // Réflechir à quoi ça sert
-        if (jvnServer != null) {
-            jvnServer.touchObject(objectId);
-        }
         try {
+            // Si 
+            if (jvnServer != null) {
+                jvnServer.touchObject(objectId, this);
+            }
             // Cette synchronisation est nécessaire pour les modifications internes
             // qui surviennent dans les callbacks RMI du coordinateur (ex : jvnInvalidateReader(), jvnInvalidateWriter(), jvnInvalidateWriterForReader()).
             // ou pour les autres threads qui appellent jvnLockRead() ou jvnLockWrite() sur le même objet local.
@@ -127,12 +127,10 @@ public class JvnObjectImpl implements JvnObject {
     public void jvnLockWrite() throws JvnException {
         // Idem que pour jvnLockRead() : on essaie d'acquérir le verrou d'invocation pour le thread courant.
         acquireInvocationScope();
-        
-        // Réflechir à quoi ça sert
-        if (jvnServer != null) {
-            jvnServer.touchObject(objectId);
-        }
         try {
+            if (jvnServer != null) {
+                jvnServer.touchObject(objectId, this);
+            }
 
             // Cette synchronisation est nécessaire pour les modifications internes
             // qui surviennent dans les callbacks RMI du coordinateur (ex : jvnInvalidateReader(), jvnInvalidateWriter(), jvnInvalidateWriterForReader()).
@@ -442,44 +440,71 @@ public class JvnObjectImpl implements JvnObject {
         notifyAll();
     }
 
+    /**
+     * Flush l'état local de l'objet vers le coordinateur.
+     * 
+     * Logique de la méthode :
+     * 1- La méthode vérifie que le thread courant n’utilise pas déjà cet objet. Si c’est le cas, elle lève une exception : sinon, le thread pourrait attendre le déverrouillage de sa propre section et se bloquer lui-même.
+     * 2- Elle prend invocationLock. Si un autre thread utilise l’objet, le flush attend son tour.
+     * 3- Elle examine lockState sous synchronized (this).
+     * 4- Pour RC, elle informe le coordinateur qu’il libère son droit de lecture.
+     * 5- Pour WC, elle envoie également l’état métier local, car il peut contenir une écriture récente.
+     * 6- L’appel réseau est fait sans tenir le moniteur this, mais invocationLock reste détenu : aucun autre thread local ne peut commencer à utiliser l’objet pendant ce temps.
+     * 7- Après le succès, l’état local passe à NL.
+        Le finally libère toujours invocationLock, même si le réseau ou le coordinateur renvoie une erreur.
+     * @throws JvnException si le flush échoue
+     */
     public void jvnFlush() throws JvnException {
         Serializable stateToSend = null;
         boolean needsFlush = false;
 
-        synchronized (this) {
-            try {
-                // Attendre la fin d'une utilisation active par l'application
-                while (lockState == LockState.R || lockState == LockState.W || lockState == LockState.RWC) {
-                    wait();
+        // 1
+        if (invocationHeldByThread.get()) {
+            throw new JvnException("Cannot flush an object while the current thread is using it", null);
+        }
+
+        // 2
+        acquireInvocationScope();
+
+
+        try {
+            synchronized (this) {
+                // Si un autre thread est en train de demander un verrou au coordinateur, on ne peut pas flush l'objet.
+                if (lockRequestInProgress != null) {
+                    throw new JvnException("Cannot flush an object while a lock request is in progress", null);
                 }
 
+                // 3
                 if (lockState == LockState.RC) {
+                    // 4
                     needsFlush = true;
                 } else if (lockState == LockState.WC) {
+                    // 5
                     needsFlush = true;
                     stateToSend = objectState;
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new JvnException("Interrupted while flushing object " + objectId, e);
-            }
-        }
-
-        if (needsFlush) {
-            try {
-                // Appel RMI distant hors du bloc synchronized
-                jvnServer.getCoord().jvnFlush(objectId, jvnServer, stateToSend);
-            } catch (java.rmi.RemoteException e) {
-                throw new JvnException("Remote error while flushing object " + objectId, e);
             }
 
-            synchronized (this) {
-                lockState = LockState.NL;
-                notifyAll();
+            // 6
+            if (needsFlush) {
+                // Appel réseau hors du moniteur, mais le verrou d'invocation empêche
+                // un autre thread local d'utiliser l'objet pendant le flush.
+                jvnServer.jvnFlushObjectState(objectId, stateToSend);
+
+                synchronized (this) {
+                    lockState = LockState.NL;
+                    notifyAll();
+                }
             }
+        } finally {
+            // 7
+            releaseInvocationScope();
         }
     }
-    
+
+    /**
+     * Vérifie si un verrou est détenu sur l'objet JVN
+     */
     public synchronized boolean isLockHeld() {
         return lockState == LockState.R || lockState == LockState.W || lockState == LockState.RWC;
     }
